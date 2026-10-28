@@ -67,6 +67,11 @@ export function sampleAlong(coords, step, trim = 0) {
   return out;
 }
 
+// The point halfway along a polyline (not just its middle vertex).
+export function midpoint(coords) {
+  return sampleAlong(coords, Infinity)[0];
+}
+
 // --- OpenStreetMap -> blocks -------------------------------------------------
 
 // Streets people walk along. Footpaths, service roads and highways are left

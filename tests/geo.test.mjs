@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  haversine, sampleAlong, polylineLength, buildBlocks, CoverageEngine, summarize, overpassQuery,
+  haversine, sampleAlong, polylineLength, buildBlocks, CoverageEngine, summarize, overpassQuery, midpoint,
 } from '../js/geo.js';
 import { parseGpx, toGpx } from '../js/gpx.js';
 
@@ -33,6 +33,15 @@ test('sampleAlong spaces points evenly and avoids the ends', () => {
   assert.equal(s.length, Math.round(len / 10));
   assert.ok(haversine(s[0], line[0]) > 3);
   assert.ok(haversine(s[s.length - 1], line[1]) > 3);
+});
+
+test('midpoint is halfway along the line, even with only two points', () => {
+  const m = midpoint([[40, -74], [40, -73.99]]);
+  assert.ok(Math.abs(m[1] - -73.995) < 1e-9 && Math.abs(m[0] - 40) < 1e-9);
+  const leg = haversine([40, -74], [40, -73.99]);
+  const bent = [[40, -74], [40, -73.99], [40 + leg / 111195, -73.99]]; // two equal legs
+  const b = midpoint(bent);
+  assert.ok(haversine(b, [40, -73.99]) < 25, 'should sit near the corner');
 });
 
 test('buildBlocks splits streets at intersections', () => {

@@ -4,7 +4,11 @@
 The output is a folder of small tiles that the app downloads from its own
 site, so adding an area doesn't depend on the busy public Overpass servers.
 
-    python3 scripts/build_streets.py data/streets NewYork.osm.pbf [more.osm.pbf ...]
+    python3 scripts/build_streets.py data/streets scripts/regions.json OSM_DIR
+
+OSM_DIR holds <region name>.osm.pbf for each region in regions.json (see
+download_extracts.py). Regions without a file are skipped. Only streets
+inside each region's bounding box are kept.
 
 Each tile is <x>_<y>.json, holding the walkable streets that touch a
 TILE_DEG x TILE_DEG square, in the same format Overpass returns. index.json
@@ -43,26 +47,31 @@ def walkable(tags):
 class Reader(osmium.SimpleHandler):
     def __init__(self):
         super().__init__()
-        self.ways = []  # (id, [node ids], name, highway)
+        self.ways = {}  # id -> ([node ids], name, highway)
         self.nodes = {}  # id -> (lat, lon)
-        self.places = []
+        self.places = {}  # name -> [lat, lon, name, place]
+        self.bbox = None  # [south, west, north, east] of the region being read
+
+    def inside(self, lat, lon):
+        s, w, n, e = self.bbox
+        return s <= lat <= n and w <= lon <= e
 
     def node(self, n):
         place = n.tags.get('place')
         if place in PLACES and n.tags.get('name') and n.location.valid():
-            self.places.append([round(n.location.lat, 5), round(n.location.lon, 5), n.tags['name'], place])
+            lat, lon = n.location.lat, n.location.lon
+            if self.inside(lat, lon):
+                self.places[(n.tags['name'], place, round(lat, 2), round(lon, 2))] = [round(lat, 5), round(lon, 5), n.tags['name'], place]
 
     def way(self, w):
-        if not walkable(w.tags):
+        if w.id in self.ways or not walkable(w.tags):
             return
-        ids = []
-        for n in w.nodes:
-            if not n.location.valid():
-                continue
-            ids.append(n.ref)
-            self.nodes[n.ref] = (round(n.location.lat, 6), round(n.location.lon, 6))
-        if len(ids) >= 2:
-            self.ways.append((w.id, ids, w.tags.get('name', ''), w.tags['highway']))
+        pts = [(n.ref, n.location.lat, n.location.lon) for n in w.nodes if n.location.valid()]
+        if len(pts) < 2 or not any(self.inside(lat, lon) for _, lat, lon in pts):
+            return
+        for ref, lat, lon in pts:
+            self.nodes[ref] = (round(lat, 6), round(lon, 6))
+        self.ways[w.id] = ([ref for ref, _, _ in pts], w.tags.get('name', ''), w.tags['highway'])
 
 
 def tiles_for_way(coords):
@@ -76,19 +85,24 @@ def tiles_for_way(coords):
     return out
 
 
-def main(out_dir, pbfs):
+def main(out_dir, regions_path, osm_dir):
     reader = Reader()
     regions = []
-    for pbf in pbfs:
-        before = set(reader.nodes)
+    for region in json.load(open(regions_path))['regions']:
+        pbf = os.path.join(osm_dir, region['name'] + '.osm.pbf')
+        if not os.path.exists(pbf):
+            print(f'skipping {region["name"]}: no {pbf}')
+            continue
+        reader.bbox = region['bbox']
+        before = len(reader.ways)
         reader.apply_file(pbf, locations=True, idx='flex_mem')
-        added = [reader.nodes[i] for i in reader.nodes.keys() - before]
-        name = os.path.basename(pbf).split('.')[0]
-        regions.append({'name': name, 'bounds': [
-            min(c[0] for c in added), min(c[1] for c in added), max(c[0] for c in added), max(c[1] for c in added)]})
+        if len(reader.ways) > before:
+            regions.append({'name': region['name'], 'bounds': region['bbox']})
+    if not reader.ways:
+        sys.exit('no street data built')
 
     tiles = {}
-    for way_id, ids, name, highway in reader.ways:
+    for way_id, (ids, name, highway) in reader.ways.items():
         coords = [reader.nodes[i] for i in ids]
         for key in tiles_for_way(coords):
             tiles.setdefault(key, []).append((way_id, ids, name, highway))
@@ -115,7 +129,7 @@ def main(out_dir, pbfs):
         'regions': regions,
         'tileDeg': TILE_DEG,
         'tiles': sorted(f'{x}_{y}' for x, y in tiles),
-        'places': reader.places,
+        'places': list(reader.places.values()),
     }
     with open(os.path.join(out_dir, 'index.json'), 'w') as f:
         json.dump(index, f, separators=(',', ':'))
@@ -126,4 +140,6 @@ def main(out_dir, pbfs):
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2:])
+    if len(sys.argv) != 4:
+        sys.exit(__doc__)
+    main(sys.argv[1], sys.argv[2], sys.argv[3])

@@ -39,25 +39,30 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install osmium
+      # Last good download, so a download site being down never blocks a deploy.
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/osm
+          key: osm-${{ hashFiles('scripts/regions.json') }}-${{ github.run_id }}
+          restore-keys: |
+            osm-${{ hashFiles('scripts/regions.json') }}-
+            osm-
       - name: Download OpenStreetMap extracts
-        run: |
-          mkdir -p "$RUNNER_TEMP/osm"
-          python3 - <<'PY'
-          import json, os, subprocess
-          for region in json.load(open('scripts/regions.json'))['regions']:
-              out = os.path.join(os.environ['RUNNER_TEMP'], 'osm', region['url'].rsplit('/', 1)[1])
-              subprocess.run(['curl', '-sSfL', '--retry', '5', '--retry-delay', '30', '-o', out, region['url']], check=True)
-          PY
+        id: download
+        run: python3 scripts/download_extracts.py scripts/regions.json "$RUNNER_TEMP/osm"
+      - if: steps.download.outputs.fresh == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/osm
+          key: osm-${{ hashFiles('scripts/regions.json') }}-${{ github.run_id }}
       - name: Build street data
-        run: python3 scripts/build_streets.py data/streets "$RUNNER_TEMP"/osm/*.osm.pbf
-      - name: Check the street data
         run: |
-          python3 - <<'PY'
-          import json
-          index = json.load(open('data/streets/index.json'))
-          assert index['regions'] and len(index['tiles']) > 50, index['regions']
-          print(len(index['tiles']), 'tiles,', len(index['places']), 'places')
-          PY
+          if python3 scripts/build_streets.py data/streets scripts/regions.json "$RUNNER_TEMP/osm"; then
+            echo "Built $(ls data/streets | wc -l) street files" >> "$GITHUB_STEP_SUMMARY"
+          else
+            rm -rf data/streets
+            echo "::warning::No street data was built. The app will use the public street servers until the next build."
+          fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .

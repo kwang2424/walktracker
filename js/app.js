@@ -1,5 +1,5 @@
 import {
-  CoverageEngine, buildBlocks, overpassQuery, placeQuery, placeName, summarize, haversine, polylineLength,
+  CoverageEngine, buildBlocks, overpassQuery, placeQuery, placeName, summarize, haversine, polylineLength, midpoint,
 } from './geo.js';
 import { parseGpx, toGpx } from './gpx.js';
 import { db } from './db.js';
@@ -267,7 +267,7 @@ function blocksFromAreas() {
   }
   const inside = (p) => areas.some(({ bbox: [s, w, n, e] }) => p[0] >= s && p[0] <= n && p[1] >= w && p[1] <= e);
   // Overpass returns whole streets; drop the parts outside the chosen areas.
-  return buildBlocks({ elements }).filter((b) => inside(b.coords[Math.floor(b.coords.length / 2)]));
+  return buildBlocks({ elements }).filter((b) => inside(midpoint(b.coords)));
 }
 
 function rebuild() {
@@ -313,7 +313,7 @@ async function addArea() {
   // Street data built into this site is fast and always available; the public
   // servers are only for places outside it.
   const index = await loadIndex();
-  const builtIn = covers(index, bbox);
+  let builtIn = covers(index, bbox);
   const limit = builtIn ? MAX_AREA_KM2_BUILT_IN : MAX_AREA_KM2;
   if (km2 > limit) {
     toast(`Zoom in a little: that's ${km2.toFixed(0)} km², the limit is ${limit} km² per area.`, 5000);
@@ -333,9 +333,12 @@ async function addArea() {
   progress();
   const ticker = setInterval(progress, 1000);
   try {
-    const osm = builtIn
-      ? await fetchFromPack(index, bbox)
-      : await fetchOverpass(overpassQuery(bbox), { onServer: (n) => { server = n; } });
+    let osm = builtIn ? await fetchFromPack(index, bbox).catch(() => null) : null;
+    // Safety net: if the built-in data is missing or has no streets here, ask the public servers.
+    if (!osm?.elements.some((el) => el.type === 'way')) {
+      builtIn = false;
+      osm = await fetchOverpass(overpassQuery(bbox), { onServer: (n) => { server = n; } });
+    }
     const slim = [];
     for (const el of osm.elements) {
       if (el.type === 'node') slim.push({ type: 'node', id: el.id, lat: el.lat, lon: el.lon });
@@ -991,7 +994,7 @@ function renderAreas() {
     const inA = (p) => p[0] >= s && p[0] <= n && p[1] >= w && p[1] <= e;
     let tot = 0, done = 0, count = 0;
     for (const [id, st] of engine.blocks) {
-      if (!inA(st.block.coords[Math.floor(st.block.coords.length / 2)])) continue;
+      if (!inA(midpoint(st.block.coords))) continue;
       count++;
       tot += st.block.length;
       if (isDone(id)) done += st.block.length;

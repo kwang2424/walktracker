@@ -1,6 +1,13 @@
 {
-  "_comment": "Street data built into the site at deploy time. Any city from https://download.bbbike.org/osm/bbbike/ works: add its .osm.pbf URL here.",
+  "_comment": "Street data built into the site at deploy time. Each region lists download URLs to try in order, and a bounding box [south, west, north, east] that the app treats as covered. BBBike has ~200 cities: https://download.bbbike.org/osm/bbbike/ . Geofabrik is a fallback: https://download.geofabrik.de/ (bigger files; only the bbox is kept).",
   "regions": [
-    { "name": "New York City", "url": "https://download.bbbike.org/osm/bbbike/NewYork/NewYork.osm.pbf" }
+    {
+      "name": "NewYork",
+      "bbox": [40.475, -74.37, 40.98, -73.65],
+      "urls": [
+        "https://download.bbbike.org/osm/bbbike/NewYork/NewYork.osm.pbf",
+        "https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf"
+      ]
+    }
   ]
 }

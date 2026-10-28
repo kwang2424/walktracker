@@ -90,17 +90,24 @@ npm start         # serve at http://localhost:8080
 
 ### Built-in street data
 
-The deploy workflow downloads OpenStreetMap extracts for the regions in `scripts/regions.json` (from
-[BBBike](https://download.bbbike.org/osm/bbbike/), updated weekly) and turns them into small tiles under
-`data/streets/` with `scripts/build_streets.py`. It runs on every deploy and every Monday, so the data stays
-fresh. The tiles aren't committed. To add a city, add its BBBike `.osm.pbf` URL to `regions.json`.
+The deploy workflow downloads OpenStreetMap extracts for the regions in `scripts/regions.json` and turns
+them into small tiles under `data/streets/`. It runs on every deploy and every Monday, so the data stays fresh.
+The tiles aren't committed.
 
-To build them locally:
+It's built so a download site being down never blocks an update:
+1. Each region lists sources in order: [BBBike](https://download.bbbike.org/osm/bbbike/) first, then
+   [Geofabrik](https://download.geofabrik.de/) (a bigger file, clipped to the region's box).
+2. If every source fails, the last good download is reused from the GitHub Actions cache.
+3. If there's still nothing, the site deploys without built-in data and the app uses the public servers.
+
+To add a city, add an entry with its download URL(s) and bounding box to `regions.json`.
+
+To build locally:
 
 ```sh
 pip install osmium
-curl -LO https://download.bbbike.org/osm/bbbike/NewYork/NewYork.osm.pbf
-python3 scripts/build_streets.py data/streets NewYork.osm.pbf
+python3 scripts/download_extracts.py scripts/regions.json osm
+python3 scripts/build_streets.py data/streets scripts/regions.json osm
 ```
 
 | File | What's in it |
@@ -111,6 +118,7 @@ python3 scripts/build_streets.py data/streets NewYork.osm.pbf
 | `js/stats.js` | Weekly stats, streaks, when each block was finished |
 | `js/db.js` | On-device storage (IndexedDB), backup export/import |
 | `js/streets.js` | Loads built-in street tiles for an area |
+| `scripts/download_extracts.py` | Downloads the OpenStreetMap extracts, with fallbacks |
 | `scripts/build_streets.py` | Builds the street tiles from an OpenStreetMap extract |
 | `js/mapview.js` | The Mapbox map: look settings, block and walk layers |
 | `js/config.js` | Optional Mapbox token for all devices |

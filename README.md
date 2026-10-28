@@ -11,6 +11,9 @@ No account, no server, and no tracking. It's a small web app you host yourself f
 - **Per-street progress** with filters: in progress, not started, done.
 - **Any city**: pan the map to a neighborhood and tap *Add streets on screen*. Streets come from OpenStreetMap
   and the area is named after the neighborhood automatically.
+- **Built-in street data for New York City**: adding an area in NYC loads in about a second from the app's own
+  site, with no outside server involved, and you can add up to 120 km² at once (all of Manhattan is ~60).
+  Other places use the public Overpass servers, which are often busy.
 - **Import past walks** from GPX files (Strava, Garmin, Google Takeout, Apple Health via an export app, etc.).
 - **Fix mistakes**: tap any block to mark it walked or not walked by hand.
 - **Own your data**: export a full backup (`.json`) or all walks as `.gpx` at any time. Import the backup on another device.
@@ -72,8 +75,8 @@ Any static host works too (Netlify, Cloudflare Pages, your own server). HTTPS is
 - **What Mapbox receives:** map tile requests for the areas you view (with your token and IP address), a
   "map load" count once per app launch with a random anonymous ID, and a daily active-user ping. Mapbox's
   performance reports are switched off. Your walks, GPS positions and progress are never sent.
-- Street data comes from the Overpass API (`overpass-api.de`, no account). Only the area you add is sent,
-  never your walks.
+- Street data inside the built-in regions comes from the app's own site. Elsewhere it comes from public
+  Overpass servers (`overpass-api.de` and two backups, no account). Only the area you add is sent, never your walks.
 
 ## Development
 
@@ -81,8 +84,23 @@ No build step: plain HTML, CSS and JavaScript modules. Mapbox GL JS v3.33 loads 
 with an integrity hash (see `index.html`), and is cached for offline use. Map settings live in `js/mapview.js`.
 
 ```sh
-npm test          # unit tests for block splitting, matching and GPX (Node 20+)
+npm test          # unit tests (Node 20+)
 npm start         # serve at http://localhost:8080
+```
+
+### Built-in street data
+
+The deploy workflow downloads OpenStreetMap extracts for the regions in `scripts/regions.json` (from
+[BBBike](https://download.bbbike.org/osm/bbbike/), updated weekly) and turns them into small tiles under
+`data/streets/` with `scripts/build_streets.py`. It runs on every deploy and every Monday, so the data stays
+fresh. The tiles aren't committed. To add a city, add its BBBike `.osm.pbf` URL to `regions.json`.
+
+To build them locally:
+
+```sh
+pip install osmium
+curl -LO https://download.bbbike.org/osm/bbbike/NewYork/NewYork.osm.pbf
+python3 scripts/build_streets.py data/streets NewYork.osm.pbf
 ```
 
 | File | What's in it |
@@ -92,6 +110,8 @@ npm start         # serve at http://localhost:8080
 | `js/power.js` | Stillness and motion detection for smart GPS |
 | `js/stats.js` | Weekly stats, streaks, when each block was finished |
 | `js/db.js` | On-device storage (IndexedDB), backup export/import |
+| `js/streets.js` | Loads built-in street tiles for an area |
+| `scripts/build_streets.py` | Builds the street tiles from an OpenStreetMap extract |
 | `js/mapview.js` | The Mapbox map: look settings, block and walk layers |
 | `js/config.js` | Optional Mapbox token for all devices |
 | `js/app.js` | Recording, stats, menus |

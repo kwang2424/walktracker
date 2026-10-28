@@ -1,0 +1,6 @@
+{
+  "_comment": "Street data built into the site at deploy time. Any city from https://download.bbbike.org/osm/bbbike/ works: add its .osm.pbf URL here.",
+  "regions": [
+    { "name": "New York City", "url": "https://download.bbbike.org/osm/bbbike/NewYork/NewYork.osm.pbf" }
+  ]
+}

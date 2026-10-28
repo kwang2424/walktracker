@@ -7,6 +7,7 @@ import { StillnessDetector, MotionWake, throttle } from './power.js';
 import { replayTracks, streak, weekStats } from './stats.js';
 import { MapView } from './mapview.js';
 import { MAPBOX_TOKEN } from './config.js';
+import { loadIndex, covers, fetchFromPack, nearestPlace } from './streets.js';
 
 // Free public OpenStreetMap servers, tried in order. They're sometimes busy,
 // so each gets a time limit before the next one is tried.
@@ -17,6 +18,7 @@ const OVERPASS = [
 ];
 const OVERPASS_TIMEOUT_MS = 30000;
 const MAX_AREA_KM2 = 20; // bigger areas often time out on the free street servers
+const MAX_AREA_KM2_BUILT_IN = 120; // street data on our own site can handle much more (all of Manhattan is ~60)
 const MIN_ACCURACY_M = 35; // ignore GPS fixes worse than this
 const MIN_STEP_M = 4; // ignore jitter while standing still
 const SAVE_EVERY_MS = 20000;
@@ -308,8 +310,13 @@ async function addArea() {
   const km2 = (haversine([bbox[0], bbox[1]], [bbox[0], bbox[3]]) / 1000) *
     (haversine([bbox[0], bbox[1]], [bbox[2], bbox[1]]) / 1000);
   closeSheet();
-  if (km2 > MAX_AREA_KM2) {
-    toast(`Zoom in a little: that's ${km2.toFixed(0)} km², the limit is ${MAX_AREA_KM2} km² per area.`, 5000);
+  // Street data built into this site is fast and always available; the public
+  // servers are only for places outside it.
+  const index = await loadIndex();
+  const builtIn = covers(index, bbox);
+  const limit = builtIn ? MAX_AREA_KM2_BUILT_IN : MAX_AREA_KM2;
+  if (km2 > limit) {
+    toast(`Zoom in a little: that's ${km2.toFixed(0)} km², the limit is ${limit} km² per area.`, 5000);
     return;
   }
   if (addingArea) return;
@@ -321,12 +328,14 @@ async function addArea() {
   let server = 1;
   const progress = () => {
     const s = Math.round((Date.now() - started) / 1000);
-    toast(`Downloading streets… ${s} s${server > 1 ? ` · trying backup server ${server - 1}` : ''}`, 5000);
+    toast(builtIn ? 'Loading streets…' : `Downloading streets… ${s} s${server > 1 ? ` · trying backup server ${server - 1}` : ''}`, 5000);
   };
   progress();
   const ticker = setInterval(progress, 1000);
   try {
-    const osm = await fetchOverpass(overpassQuery(bbox), { onServer: (n) => { server = n; } });
+    const osm = builtIn
+      ? await fetchFromPack(index, bbox)
+      : await fetchOverpass(overpassQuery(bbox), { onServer: (n) => { server = n; } });
     const slim = [];
     for (const el of osm.elements) {
       if (el.type === 'node') slim.push({ type: 'node', id: el.id, lat: el.lat, lon: el.lon });
@@ -334,8 +343,11 @@ async function addArea() {
     }
     clearInterval(ticker);
     if (!slim.some((el) => el.type === 'way')) { toast('No walkable streets found here.', 4000); return; }
-    toast('Naming the area…', 10000);
-    const name = await fetchOverpass(placeQuery(center), { timeoutMs: 8000, servers: 1 }).then(placeName).catch(() => '');
+    let name = builtIn ? nearestPlace(index, center, { broad: km2 > 8 }) : '';
+    if (!name) {
+      toast('Naming the area…', 10000);
+      name = await fetchOverpass(placeQuery(center), { timeoutMs: 8000, servers: 1 }).then(placeName).catch(() => '');
+    }
     const area = { name: name || `Area ${areas.length + 1}`, bbox, osm: slim, createdAt: Date.now() };
     area.id = await db.put('areas', area);
     const before = engine.blocks.size;

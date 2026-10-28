@@ -1,0 +1,294 @@
+// The map: Mapbox GL JS with the Mapbox Standard style, plus our own layers for
+// blocks and walk lines. Everything outside this file uses [lat, lon]; Mapbox
+// wants [lon, lat], so conversions happen here.
+/* global mapboxgl */
+
+const STYLE = 'mapbox://styles/mapbox/standard';
+const STATE = { none: 0, partial: 1, walked: 2 };
+const LIVE_EVERY_MS = 2000; // redraw the live walk line at most this often
+
+const ll = (p) => [p[1], p[0]];
+const collection = (features) => ({ type: 'FeatureCollection', features });
+
+// Mapbox Standard settings for a given look. 3D buildings are always off: they
+// cost GPU (and battery) and hide the street blocks.
+function basemapConfig({ theme, dark }) {
+  const full = theme === 'default';
+  return {
+    theme,
+    lightPreset: dark ? 'night' : 'day',
+    show3dObjects: false,
+    showPointOfInterestLabels: full,
+    showTransitLabels: full,
+    showLandmarkIcons: false,
+    showPedestrianRoads: full,
+  };
+}
+
+export class MapView {
+  constructor(container, { token, theme = 'faded', dark = false, colors, onBlockClick, onUserMove, onAuthError } = {}) {
+    this.colors = colors;
+    this.look = { theme, dark };
+    this.idxOf = new Map(); // block id -> numeric feature id
+    this.idOf = []; // numeric feature id -> block id
+    this.states = []; // numeric feature id -> STATE value
+    this.highlighted = new Set();
+    this.blocksData = collection([]);
+    this.tracksData = collection([]);
+    this.liveData = collection([]);
+    this.tracksVisible = true;
+    this.popup = null;
+    this.me = null;
+
+    mapboxgl.accessToken = token;
+    this.map = new mapboxgl.Map({
+      container,
+      style: STYLE,
+      config: { basemap: basemapConfig(this.look) },
+      projection: 'mercator',
+      center: [-73.9866, 40.7306],
+      zoom: 15,
+      maxZoom: 19,
+      dragRotate: false,
+      pitchWithRotate: false,
+      touchPitch: false,
+      fadeDuration: 0,
+      performanceMetricsCollection: false, // don't send Mapbox render-speed reports
+    });
+    this.map.touchZoomRotate.disableRotation();
+    this.map.keyboard.disableRotation();
+    this.map.on('style.load', () => this._addLayers());
+    this.map.on('dragstart', () => onUserMove?.());
+    this.map.on('error', (e) => {
+      const status = e?.error?.status;
+      if (status === 401 || status === 403) onAuthError?.();
+    });
+    this.map.on('click', 'blocks-hit', (e) => {
+      const f = e.features?.[0];
+      if (f && onBlockClick) onBlockClick(this.idOf[f.id], [e.lngLat.lat, e.lngLat.lng]);
+    });
+    this.map.on('mouseenter', 'blocks-hit', () => { this.map.getCanvas().style.cursor = 'pointer'; });
+    this.map.on('mouseleave', 'blocks-hit', () => { this.map.getCanvas().style.cursor = ''; });
+  }
+
+  _isStandard() {
+    return (this.map.getStyle().imports || []).some((i) => i.id === 'basemap');
+  }
+
+  // Our lines sit above roads but under street names, so names stay readable.
+  // Mapbox Standard has a "middle" slot for exactly this; other styles get the
+  // layers just before their labels.
+  _placement() {
+    if (this._isStandard()) return { slot: 'middle' };
+    const layers = this.map.getStyle().layers;
+    let lastShape = -1;
+    layers.forEach((l, i) => { if (l.type !== 'symbol') lastShape = i; });
+    return { before: layers[lastShape + 1]?.id };
+  }
+
+  _addLayers() {
+    const m = this.map;
+    const c = this.colors;
+    const { slot, before } = this._placement();
+    const add = (layer) => m.addLayer(slot ? { ...layer, slot } : layer, before);
+    m.addSource('tracks', { type: 'geojson', data: this.tracksData });
+    m.addSource('live', { type: 'geojson', data: this.liveData });
+    m.addSource('blocks', { type: 'geojson', data: this.blocksData });
+    const round = { 'line-cap': 'round', 'line-join': 'round' };
+    add({
+      id: 'tracks', type: 'line', source: 'tracks',
+      layout: { ...round, visibility: this.tracksVisible ? 'visible' : 'none' },
+      paint: { 'line-color': c.track, 'line-opacity': 0.4, 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 17, 2.5] },
+    });
+    add({
+      id: 'live', type: 'line', source: 'live', layout: round,
+      paint: { 'line-color': c.track, 'line-opacity': 0.8, 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 2, 17, 4] },
+    });
+    const s = ['coalesce', ['feature-state', 's'], 0];
+    const hl = ['boolean', ['feature-state', 'hl'], false];
+    const width = (none, partial, walked, lit) => ['case', hl, lit, ['match', s, 2, walked, 1, partial, none]];
+    add({
+      id: 'blocks', type: 'line', source: 'blocks', layout: round,
+      paint: {
+        'line-color': ['match', s, 2, c.walked, 1, c.partial, c.unwalked],
+        'line-opacity': ['match', s, 2, 1, 1, 0.95, 0.7],
+        'line-width': ['interpolate', ['exponential', 1.6], ['zoom'],
+          12, width(0.8, 1.3, 1.8, 4),
+          16, width(2.5, 4, 5.5, 10),
+          19, width(6, 9, 12, 20)],
+        'line-emissive-strength': 1, // keep colors bright under the night light preset
+      },
+    });
+    // Invisible, extra-wide copy so blocks are easy to tap.
+    m.addLayer({
+      id: 'blocks-hit', type: 'line', source: 'blocks', layout: round,
+      paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 22 },
+    });
+    this._applyAllStates();
+  }
+
+  _ready() {
+    return !!this.map.getSource('blocks');
+  }
+
+  _applyAllStates() {
+    if (!this._ready()) return;
+    this.states.forEach((s, i) => this.map.setFeatureState({ source: 'blocks', id: i }, { s }));
+    for (const i of this.highlighted) this.map.setFeatureState({ source: 'blocks', id: i }, { hl: true });
+  }
+
+  // theme: 'faded' | 'monochrome' | 'default'; dark: night lighting.
+  setLook(look) {
+    const next = { ...this.look, ...look };
+    if (next.theme === this.look.theme && next.dark === this.look.dark) return;
+    this.look = next;
+    if (!this.map.isStyleLoaded() || !this._isStandard()) return;
+    for (const [k, v] of Object.entries(basemapConfig(next))) this.map.setConfigProperty('basemap', k, v);
+  }
+
+  setColors(colors) {
+    this.colors = colors;
+    if (!this._ready()) return;
+    const s = ['coalesce', ['feature-state', 's'], 0];
+    this.map.setPaintProperty('blocks', 'line-color', ['match', s, 2, colors.walked, 1, colors.partial, colors.unwalked]);
+    this.map.setPaintProperty('tracks', 'line-color', colors.track);
+    this.map.setPaintProperty('live', 'line-color', colors.track);
+  }
+
+  setBlocks(blocks) {
+    this.idxOf = new Map();
+    this.idOf = [];
+    this.states = [];
+    this.highlighted.clear();
+    const features = blocks.map((b, i) => {
+      this.idxOf.set(b.id, i);
+      this.idOf.push(b.id);
+      this.states.push(0);
+      return { type: 'Feature', id: i, properties: {}, geometry: { type: 'LineString', coordinates: b.coords.map(ll) } };
+    });
+    this.blocksData = collection(features);
+    if (this._ready()) {
+      this.map.removeFeatureState({ source: 'blocks' });
+      this.map.getSource('blocks').setData(this.blocksData);
+    }
+  }
+
+  setBlockState(id, state) {
+    const i = this.idxOf.get(id);
+    if (i == null) return;
+    const s = STATE[state] ?? 0;
+    if (this.states[i] === s) return;
+    this.states[i] = s;
+    if (this._ready()) this.map.setFeatureState({ source: 'blocks', id: i }, { s });
+  }
+
+  highlight(ids, on) {
+    for (const id of ids) {
+      const i = this.idxOf.get(id);
+      if (i == null) continue;
+      if (on) this.highlighted.add(i);
+      else this.highlighted.delete(i);
+      if (this._ready()) this.map.setFeatureState({ source: 'blocks', id: i }, { hl: on });
+    }
+  }
+
+  setTracks(pointLists) {
+    this.tracksData = collection(pointLists.filter((pts) => pts.length > 1).map((pts) => ({
+      type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: pts.map(ll) },
+    })));
+    this.map.getSource('tracks')?.setData(this.tracksData);
+  }
+
+  setTracksVisible(on) {
+    this.tracksVisible = on;
+    if (this.map.getLayer('tracks')) this.map.setLayoutProperty('tracks', 'visibility', on ? 'visible' : 'none');
+  }
+
+  // Throttled: re-sending a long line on every GPS fix would waste battery.
+  setLive(points) {
+    this.livePoints = points;
+    if (!points.length) {
+      clearTimeout(this.liveTimer);
+      this.liveTimer = null;
+      this._pushLive();
+      return;
+    }
+    if (this.liveTimer) return;
+    const wait = Math.max(0, (this.liveAt || 0) + LIVE_EVERY_MS - Date.now());
+    this.liveTimer = setTimeout(() => { this.liveTimer = null; this._pushLive(); }, wait);
+  }
+
+  _pushLive() {
+    this.liveAt = Date.now();
+    const pts = this.livePoints || [];
+    this.liveData = collection(pts.length > 1
+      ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: pts.map(ll) } }]
+      : []);
+    this.map.getSource('live')?.setData(this.liveData);
+  }
+
+  showMe(p) {
+    if (!this.me) {
+      const el = document.createElement('div');
+      el.className = 'me-dot';
+      this.me = new mapboxgl.Marker({ element: el }).setLngLat(ll(p)).addTo(this.map);
+    } else this.me.setLngLat(ll(p));
+  }
+
+  openPopup(p, el) {
+    this.closePopup();
+    this.popup = new mapboxgl.Popup({ maxWidth: '300px', offset: 10, focusAfterOpen: false })
+      .setLngLat(ll(p)).setDOMContent(el).addTo(this.map);
+  }
+
+  closePopup() {
+    this.popup?.remove();
+    this.popup = null;
+  }
+
+  // Fit a list of [lat, lon] points on screen, clear of the cards and buttons.
+  fitPoints(points, { maxZoom = 17, animate = true } = {}) {
+    if (!points.length) return;
+    let s = Infinity, w = Infinity, n = -Infinity, e = -Infinity;
+    for (const p of points) {
+      s = Math.min(s, p[0]); n = Math.max(n, p[0]);
+      w = Math.min(w, p[1]); e = Math.max(e, p[1]);
+    }
+    const h = this.map.getContainer().clientHeight;
+    const pad = Math.min(40, h / 10);
+    this.map.fitBounds([[w, s], [e, n]], {
+      padding: { top: Math.min(140, h / 4), bottom: Math.min(120, h / 4), left: pad, right: pad },
+      maxZoom, animate, duration: 600,
+    });
+  }
+
+  setView(p, zoom) {
+    this.map.jumpTo({ center: ll(p), zoom });
+  }
+
+  panTo(p) {
+    this.map.easeTo({ center: ll(p), duration: 600 });
+  }
+
+  getZoom() {
+    return this.map.getZoom();
+  }
+
+  getCenter() {
+    const c = this.map.getCenter();
+    return [c.lat, c.lng];
+  }
+
+  getBBox() {
+    const b = this.map.getBounds();
+    return [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
+  }
+
+  // True when p is off screen or within `margin` (share of the screen) of an edge.
+  isNearEdge(p, margin = 0.25) {
+    const { x, y } = this.map.project(ll(p));
+    const el = this.map.getContainer();
+    const w = el.clientWidth, h = el.clientHeight;
+    return x < w * margin || x > w * (1 - margin) || y < h * margin || y > h * (1 - margin);
+  }
+}

@@ -27,25 +27,18 @@ jobs:
           node-version: 22
       - run: npm test
 
-  deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+  # Builds the site, including street data for the regions in
+  # scripts/regions.json. Runs on pull requests too, so a broken data build
+  # shows up before merging.
+  build:
     needs: test
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install osmium
-      # Street data for the regions in scripts/regions.json, served from this
-      # site so adding an area doesn't depend on busy public servers.
       - name: Download OpenStreetMap extracts
         run: |
           mkdir -p "$RUNNER_TEMP/osm"
@@ -57,9 +50,30 @@ jobs:
           PY
       - name: Build street data
         run: python3 scripts/build_streets.py data/streets "$RUNNER_TEMP"/osm/*.osm.pbf
-      - uses: actions/configure-pages@v5
+      - name: Check the street data
+        run: |
+          python3 - <<'PY'
+          import json
+          index = json.load(open('data/streets/index.json'))
+          assert index['regions'] and len(index['tiles']) > 50, index['regions']
+          print(len(index['tiles']), 'tiles,', len(index['places']), 'places')
+          PY
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
       - id: deployment
         uses: actions/deploy-pages@v4

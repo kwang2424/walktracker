@@ -57,11 +57,35 @@ function readColors() {
 }
 
 // ---------------------------------------------------------------- Mapbox token
-// The token lives on this device (pasted in the app) or in js/config.js.
+// The token lives on this device (pasted in the app) or in js/config.js. It's
+// saved twice, in localStorage and IndexedDB, so it survives if the browser
+// clears one of them.
 const TOKEN_KEY = 'walktracker.mapboxToken';
-function getToken() {
-  try { return localStorage.getItem(TOKEN_KEY) || MAPBOX_TOKEN; } catch { return MAPBOX_TOKEN; }
+let savedToken = '';
+
+function readLocalToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; }
 }
+
+async function loadToken() {
+  let t = readLocalToken();
+  if (!t) {
+    // Don't let a stuck IndexedDB hold up the app.
+    const fromDb = db.get('meta', 'mapboxToken').catch(() => '');
+    t = (await Promise.race([fromDb, new Promise((r) => setTimeout(() => r(''), 2000))])) || '';
+    if (t) { try { localStorage.setItem(TOKEN_KEY, t); } catch { /* ignore */ } }
+  }
+  return t || MAPBOX_TOKEN;
+}
+
+async function saveToken(token) {
+  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* ignore */ }
+  try { await db.put('meta', token, 'mapboxToken'); } catch { /* ignore */ }
+  // Ask the browser not to clear this site's storage on its own.
+  try { await navigator.storage?.persist?.(); } catch { /* ignore */ }
+}
+
+const getToken = () => savedToken;
 
 function showSetup(message = '') {
   const token = getToken();
@@ -73,7 +97,7 @@ function showSetup(message = '') {
   $('#setup-cancel').hidden = !token || !!message;
 }
 
-$('#setup-form').addEventListener('submit', (e) => {
+$('#setup-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const token = $('#setup-token').value.trim();
   if (!/^pk\.[\w-]+\.[\w-]+$/.test(token)) {
@@ -81,13 +105,14 @@ $('#setup-form').addEventListener('submit', (e) => {
     $('#setup-error').textContent = 'That doesn’t look like a public Mapbox token. It should start with “pk.”';
     return;
   }
-  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* ignore */ }
+  await saveToken(token);
   location.reload();
 });
 $('#setup-cancel').addEventListener('click', () => { $('#setup').hidden = true; });
 
 let lastDrag = 0;
-const token = getToken();
+savedToken = await loadToken();
+const token = savedToken;
 const mapLibLoaded = typeof window.mapboxgl !== 'undefined';
 const view = token && mapLibLoaded ? new MapView($('#map'), {
   token,
@@ -95,7 +120,7 @@ const view = token && mapLibLoaded ? new MapView($('#map'), {
   colors: readColors(),
   onBlockClick: (id, at) => openBlockPopup(id, at),
   onUserMove: () => { lastDrag = Date.now(); },
-  onAuthError: () => showSetup(`Mapbox didn’t accept this token. Check that it’s copied fully, and if it has URL restrictions, that they include ${location.origin}.`),
+  onAuthError: (status) => showSetup(`Mapbox didn’t accept this token (error ${status}). Check that it’s copied fully, and if it has URL restrictions, that they include ${location.origin + location.pathname.replace(/index\.html$/, '')}`),
 }) : null;
 
 function applyMapStyle() {

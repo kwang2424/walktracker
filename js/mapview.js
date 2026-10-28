@@ -57,11 +57,16 @@ export class MapView {
     });
     this.map.touchZoomRotate.disableRotation();
     this.map.keyboard.disableRotation();
-    this.map.on('style.load', () => this._addLayers());
+    this.styleLoaded = false;
+    this.map.on('style.load', () => { this.styleLoaded = true; this._addLayers(); });
     this.map.on('dragstart', () => onUserMove?.());
+    // Only a refused token that stops the map loading at all counts as a token
+    // problem. A single refused tile later on shouldn't send you back to setup.
     this.map.on('error', (e) => {
       const status = e?.error?.status;
-      if (status === 401 || status === 403) onAuthError?.();
+      if (status !== 401 && status !== 403) return;
+      if (this.styleLoaded) console.warn('Mapbox refused a request', status, e?.error?.url || '');
+      else onAuthError?.(status);
     });
     this.map.on('click', 'blocks-hit', (e) => {
       const f = e.features?.[0];

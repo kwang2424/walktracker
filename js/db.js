@@ -1,7 +1,7 @@
 // Tiny promise wrapper around IndexedDB. Everything the app knows lives here, on the device.
 
 const DB_NAME = 'walktracker';
-const VERSION = 1;
+const VERSION = 2;
 const STORES = ['tracks', 'areas', 'overrides'];
 
 let dbPromise;
@@ -20,6 +20,9 @@ function open() {
         }
         if (!db.objectStoreNames.contains('overrides')) {
           db.createObjectStore('overrides'); // key: block id, value: boolean
+        }
+        if (!db.objectStoreNames.contains('meta')) {
+          db.createObjectStore('meta'); // device settings such as the Mapbox token; not in backups
         }
       };
       req.onsuccess = () => resolve(req.result);

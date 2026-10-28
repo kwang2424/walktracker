@@ -72,6 +72,22 @@ export function midpoint(coords) {
   return sampleAlong(coords, Infinity)[0];
 }
 
+// GeoJSON rings are [lon, lat]; points here are [lat, lon].
+export function pointInMultiPolygon([lat, lon], multi) {
+  let inside = false;
+  for (const polygon of multi) {
+    for (const ring of polygon) {
+      // Even-odd rule across all rings handles holes too.
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i];
+        const [xj, yj] = ring[j];
+        if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+      }
+    }
+  }
+  return inside;
+}
+
 // --- OpenStreetMap -> blocks -------------------------------------------------
 
 // Streets people walk along. Footpaths, service roads and highways are left
@@ -80,35 +96,6 @@ export const WALKABLE_HIGHWAYS = [
   'primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary',
   'tertiary_link', 'residential', 'unclassified', 'living_street', 'pedestrian',
 ];
-
-// `center` ([lat, lon]) also asks which neighborhood the area is in, to name it.
-export function overpassQuery([south, west, north, east], center) {
-  const hw = WALKABLE_HIGHWAYS.join('|');
-  let q =
-    `[out:json][timeout:90];` +
-    `way["highway"~"^(${hw})$"]["area"!="yes"]["access"!~"^(private|no)$"]["foot"!="no"]` +
-    `(${south},${west},${north},${east});(._;>;);out body;`;
-  if (center) {
-    q += `is_in(${center[0]},${center[1]})->.a;` +
-      `area.a["name"]["place"~"^(neighbourhood|quarter|suburb|borough|city_district|town|village|city)$"];out tags;`;
-  }
-  return q;
-}
-
-// Just the neighborhood lookup, sent separately so a slow lookup never holds up the streets.
-export function placeQuery(center) {
-  return `[out:json][timeout:15];is_in(${center[0]},${center[1]})->.a;` +
-    `area.a["name"]["place"~"^(neighbourhood|quarter|suburb|borough|city_district|town|village|city)$"];out tags;`;
-}
-
-const PLACE_RANK = ['neighbourhood', 'quarter', 'suburb', 'city_district', 'borough', 'village', 'town', 'city'];
-
-// The most local place name in an Overpass response, or '' if none.
-export function placeName(osm) {
-  const places = (osm.elements || []).filter((e) => e.type === 'area' && e.tags && e.tags.name);
-  places.sort((a, b) => PLACE_RANK.indexOf(a.tags.place) - PLACE_RANK.indexOf(b.tags.place));
-  return places.length ? places[0].tags.name : '';
-}
 
 // Split OSM ways at intersections. Each piece between two intersections is a "block".
 export function buildBlocks(osm, { minLength = 5 } = {}) {

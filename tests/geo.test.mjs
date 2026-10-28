@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  haversine, sampleAlong, polylineLength, buildBlocks, CoverageEngine, summarize, overpassQuery, midpoint,
+  haversine, sampleAlong, polylineLength, buildBlocks, CoverageEngine, summarize, midpoint,
 } from '../js/geo.js';
 import { parseGpx, toGpx } from '../js/gpx.js';
 
@@ -111,12 +111,6 @@ test('summarize totals blocks, lengths and per-street progress, honoring overrid
   assert.ok(Math.abs(s.walkedLen - ave.length) < 1e-6);
   const st = s.streets.find((x) => x.name === '1st Ave');
   assert.equal(st.walked, 1);
-});
-
-test('overpass query includes the bbox', () => {
-  const q = overpassQuery([1, 2, 3, 4]);
-  assert.match(q, /\(1,2,3,4\)/);
-  assert.match(q, /residential/);
 });
 
 test('GPX round trip keeps points and times', () => {

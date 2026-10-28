@@ -72,28 +72,22 @@ export const db = {
       version: VERSION,
       exportedAt: new Date().toISOString(),
       tracks: await this.all('tracks'),
-      areas: await this.all('areas'),
       overrides: await this.overrides(),
     };
   },
 
-  // Merges a backup into what's already here. Tracks/areas get new ids to avoid clashes.
+  // Merges a backup into what's already here. Walks get new ids to avoid clashes.
   async importAll(data) {
     if (!data || data.app !== 'walktracker') throw new Error('Not a WalkTracker backup file');
     // Skip anything that's already here so importing the same backup twice is harmless.
     const trackKey = (t) => `${t.startedAt}|${t.points.length}`;
     const haveTracks = new Set((await this.all('tracks')).map(trackKey));
-    const haveAreas = new Set((await this.all('areas')).map((a) => JSON.stringify(a.bbox)));
     for (const t of data.tracks || []) {
       if (haveTracks.has(trackKey(t))) continue;
       const { id, ...rest } = t;
       await this.put('tracks', rest);
     }
-    for (const a of data.areas || []) {
-      if (haveAreas.has(JSON.stringify(a.bbox))) continue;
-      const { id, ...rest } = a;
-      await this.put('areas', rest);
-    }
+    // Older backups also have custom "areas"; the app now uses NYC's neighborhoods instead.
     for (const [k, v] of Object.entries(data.overrides || {})) await this.put('overrides', v, k);
   },
 };

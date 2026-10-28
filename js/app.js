@@ -1,24 +1,13 @@
-import {
-  CoverageEngine, buildBlocks, overpassQuery, placeQuery, placeName, summarize, haversine, polylineLength, midpoint,
-} from './geo.js';
+import { haversine, polylineLength, pointInMultiPolygon } from './geo.js';
 import { parseGpx, toGpx } from './gpx.js';
 import { db } from './db.js';
 import { StillnessDetector, MotionWake, throttle } from './power.js';
-import { replayTracks, streak, weekStats } from './stats.js';
-import { MapView } from './mapview.js';
+import { streak, weekStats } from './stats.js';
+import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { MAPBOX_TOKEN } from './config.js';
-import { loadIndex, covers, fetchFromPack, nearestPlace } from './streets.js';
+import { City, CITY_BASE, overrideWalked } from './city.js';
 
-// Free public OpenStreetMap servers, tried in order. They're sometimes busy,
-// so each gets a time limit before the next one is tried.
-const OVERPASS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.private.coffee/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-];
-const OVERPASS_TIMEOUT_MS = 30000;
-const MAX_AREA_KM2 = 20; // bigger areas often time out on the free street servers
-const MAX_AREA_KM2_BUILT_IN = 120; // street data on our own site can handle much more (all of Manhattan is ~60)
+const MAX_VISIBLE_HOODS = 30; // load blocks for at most this many neighborhoods on screen
 const MIN_ACCURACY_M = 35; // ignore GPS fixes worse than this
 const MIN_STEP_M = 4; // ignore jitter while standing still
 const SAVE_EVERY_MS = 20000;
@@ -38,14 +27,14 @@ delete settings.detailedMap;
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* ignore */ } };
 
 // ---------------------------------------------------------------- state
-const engine = new CoverageEngine();
-let overrides = {};
+// All of NYC by neighborhood; only the ones you look at or walked in are loaded.
+const city = new City({ onLoad: (id) => onHoodLoaded(id) });
+let overrides = {}; // block id -> { walked, hood }
 let tracks = [];
-let areas = [];
-let completedAt = new Map(); // block id -> time the block was finished
-let newByTrack = new Map(); // track id -> blocks finished on that walk
 let nodeNames = new Map(); // OSM node id -> street names meeting there
 let lastSummary = null;
+let outlines = null; // neighborhood outlines (GeoJSON)
+let streetTotals = null; // every street with its block count, loaded when needed
 let rec = null; // the walk being recorded
 let pocketOn = false;
 let lowBattery = false;
@@ -125,7 +114,9 @@ const view = token && mapLibLoaded ? new MapView($('#map'), {
   ...mapLook(),
   colors: readColors(),
   onBlockClick: (id, at) => openBlockPopup(id, at),
+  onHoodClick: (i) => openHood(city.index.hoods[i].id),
   onUserMove: () => { lastDrag = Date.now(); },
+  onMoveEnd: () => onMapMoved(),
   onAuthError: (status) => showSetup(`Mapbox didn’t accept this token (error ${status}). Check that it’s copied fully, and if it has URL restrictions, that they include ${location.origin + location.pathname.replace(/index\.html$/, '')}`),
 }) : null;
 
@@ -135,17 +126,18 @@ function applyMapStyle() {
 }
 if (view) darkQuery.addEventListener('change', applyMapStyle);
 
-const isDone = (id) => (id in overrides ? !!overrides[id] : engine.isWalked(id));
+const isDone = (id) => city.isWalked(id, overrides);
 
 function blockState(id) {
   if (isDone(id)) return 'walked';
-  if (engine.fraction(id) > 0.34) return 'partial';
+  if (city.fraction(id) > 0.34) return 'partial';
   return 'none';
 }
 
 function drawBlocks() {
-  view.setBlocks([...engine.blocks.values()].map((s) => s.block));
-  for (const id of engine.blocks.keys()) view.setBlockState(id, blockState(id));
+  const blocks = city.loadedBlocks();
+  view.setBlocks(blocks);
+  for (const b of blocks) view.setBlockState(b.id, blockState(b.id));
 }
 
 // Map updates are batched to one per frame, and skipped entirely while the
@@ -166,16 +158,31 @@ function scheduleFlush() {
   });
 }
 
+// Neighborhoods finish loading one by one; redraw once they settle.
+let redrawTimer = null;
+function onHoodLoaded(id) {
+  indexNodeNames(city.loaded.get(id).blocks);
+  clearTimeout(redrawTimer);
+  redrawTimer = setTimeout(() => {
+    if (asleep()) { blocksDirty = true; return; }
+    drawBlocks();
+    renderStats();
+  }, 120);
+}
+let blocksDirty = false;
+
 function drawTracks() {
   view.setTracks(tracks.map((t) => t.points));
   view.setTracksVisible(settings.showTracks);
 }
 
 // ---------------------------------------------------------------- block names
-function indexNodeNames() {
-  nodeNames = new Map();
-  for (const { block } of engine.blocks.values()) {
-    for (const n of [block.from, block.to]) {
+// Block ids are "<way>:<from node>-<to node>:<n>", so the end nodes give the cross streets.
+const endsOf = (block) => block.id.split(':')[1].split('-');
+
+function indexNodeNames(blocks) {
+  for (const block of blocks) {
+    for (const n of endsOf(block)) {
       if (!nodeNames.has(n)) nodeNames.set(n, new Set());
       if (block.name) nodeNames.get(n).add(block.name);
     }
@@ -183,17 +190,19 @@ function indexNodeNames() {
 }
 
 function crossStreets(block) {
+  const [from, to] = endsOf(block);
   const pick = (n) => [...(nodeNames.get(n) || [])].find((x) => x !== block.name) || '';
-  const a = pick(block.from);
-  const b = pick(block.to);
+  const a = pick(from);
+  const b = pick(to);
   if (a && b && a !== b) return `${a} → ${b}`;
   if (a || b) return `near ${a || b}`;
   return '';
 }
 
 function openBlockPopup(id, latlng) {
-  const { block } = engine.blocks.get(id);
-  const f = engine.fraction(id);
+  const block = city.block(id);
+  if (!block) return;
+  const f = city.fraction(id);
   const manual = id in overrides;
   const done = isDone(id);
   const el = document.createElement('div');
@@ -206,13 +215,16 @@ function openBlockPopup(id, latlng) {
       ${manual ? '<button data-act="reset">Use GPS</button>' : ''}
     </div>`;
   el.querySelector('.pop-title').textContent = block.name || 'Unnamed street';
-  el.querySelector('.pop-sub').textContent = [crossStreets(block), `${Math.round(block.length)} m`].filter(Boolean).join(' · ');
+  el.querySelector('.pop-sub').textContent = [crossStreets(block), city.hoods.get(block.hood)?.name, `${Math.round(block.length)} m`].filter(Boolean).join(' · ');
   el.querySelector('.pop-status').textContent =
     (done ? 'Walked' : f > 0 ? `${Math.round(f * 100)}% walked` : 'Not walked yet') + (manual ? ' · set by you' : '');
   el.addEventListener('click', async (e) => {
     const act = e.target.dataset.act;
     if (!act) return;
-    if (act === 'toggle') { overrides[id] = !done; await db.put('overrides', !done, id); }
+    if (act === 'toggle') {
+      overrides[id] = { walked: !done, hood: block.hood };
+      await db.put('overrides', overrides[id], id);
+    }
     if (act === 'reset') { delete overrides[id]; await db.delete('overrides', id); }
     view.setBlockState(id, blockState(id));
     renderStats();
@@ -223,65 +235,51 @@ function openBlockPopup(id, latlng) {
 
 // ---------------------------------------------------------------- stats
 const km = (m) => (m < 10000 ? (m / 1000).toFixed(1) : Math.round(m / 1000).toLocaleString()) + ' km';
-const fmtPct = (p) => (p > 0 && p < 10 ? p.toFixed(1) : Math.round(p)) + '%';
+const fmtPct = (p) => (p > 0 && p < 0.1 ? '<0.1' : p > 0 && p < 10 ? p.toFixed(1) : Math.round(p)) + '%';
 
 let statsDirty = false;
 function renderStats() {
+  if (!city.index) return;
   if (asleep()) { statsDirty = true; return; }
   statsDirty = false;
-  const s = (lastSummary = summarize(engine, overrides));
-  const pct = s.totalLen ? (100 * s.walkedLen) / s.totalLen : 0;
+  const s = (lastSummary = city.summary(overrides));
+  const pct = s.length ? (100 * s.walkedLength) / s.length : 0;
   $('#ring-fill').style.strokeDashoffset = RING * (1 - pct / 100);
   $('#stat-pct').textContent = fmtPct(pct);
   $('#stat-blocks').textContent = s.walked.toLocaleString();
-  $('#stat-total').textContent = s.total.toLocaleString();
-  $('#stat-dist').textContent = `${km(s.walkedLen)} of ${km(s.totalLen)} walked`;
+  $('#stat-total').textContent = s.blocks.toLocaleString();
+  $('#stat-dist').textContent = `${km(s.walkedLength)} of ${km(s.length)} of NYC walked`;
 
   const all = rec ? [...tracks, { startedAt: rec.track.startedAt, distance: rec.dist, points: [] }] : tracks;
-  const week = weekStats(all, completedAt);
+  const week = weekStats(all, city.completedAt);
   $('#chip-week').textContent = `This week · ${km(week.meters)} · ${week.blocks} new block${week.blocks === 1 ? '' : 's'}`;
   const days = streak(all);
   $('#chip-streak').hidden = days < 2;
   $('#chip-streak').textContent = `🔥 ${days}-day streak`;
 
-  const empty = !areas.length;
-  $('#empty').hidden = !empty || !!rec;
-  $('#hud').hidden = empty || !!rec;
+  // Shade each neighborhood on the map by how much of it you've walked.
+  s.hoods.forEach((h, i) => view.setHoodProgress(i, h.length ? h.walkedLength / h.length : 0));
+  renderHoodChip();
+  $('#hud').hidden = !!rec;
   if ($('#sheet').open) renderSheet();
 }
 const updateStats = throttle(renderStats, 1000);
 
 // ---------------------------------------------------------------- data loading
-// Merge every area's raw OSM data and split it into blocks in one go, so streets
-// that cross area borders are split at the same intersections.
-function blocksFromAreas() {
-  const seen = new Set();
-  const elements = [];
-  for (const a of areas) {
-    for (const el of a.osm) {
-      const key = el.type + el.id;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      elements.push(el);
-    }
-  }
-  const inside = (p) => areas.some(({ bbox: [s, w, n, e] }) => p[0] >= s && p[0] <= n && p[1] >= w && p[1] <= e);
-  // Overpass returns whole streets; drop the parts outside the chosen areas.
-  return buildBlocks({ elements }).filter((b) => inside(midpoint(b.coords)));
-}
-
-function rebuild() {
-  engine.setBlocks(blocksFromAreas());
-  ({ completedAt, newByTrack } = replayTracks(engine, tracks));
-  if (rec) engine.addTrack(rec.points);
-  indexNodeNames();
-  drawBlocks();
-  drawTracks();
-  renderStats();
-}
-
 async function reloadData() {
-  [tracks, areas, overrides] = await Promise.all([db.all('tracks'), db.all('areas'), db.overrides()]);
+  [tracks, overrides] = await Promise.all([db.all('tracks'), db.overrides()]);
+}
+
+// Load the neighborhoods your walks and hand-marked blocks are in.
+async function rebuild() {
+  const ids = new Set(city.setTracks(tracks));
+  for (const v of Object.values(overrides)) if (v?.hood) ids.add(v.hood);
+  drawTracks();
+  if (ids.size > 4) toast('Loading your progress…', 15000);
+  await city.ensure([...ids]).catch((err) => console.warn('Some neighborhoods did not load', err));
+  if (ids.size > 4) toast('');
+  drawBlocks();
+  renderStats();
 }
 
 async function load() {
@@ -295,102 +293,68 @@ async function load() {
       await db.put('tracks', t);
     }
   }
-  rebuild();
-  if (areas.length) {
-    view.fitPoints(areas.flatMap(({ bbox: [s, w, n, e] }) => [[s, w], [n, e]]), { animate: false });
-  } else {
-    view.setView([40.7306, -73.9866], 15);
+  view.setView([40.7306, -73.9866], 14);
+  try {
+    await city.init();
+    outlines = await fetch(CITY_BASE + 'neighborhoods.geojson').then((r) => r.json());
+  } catch (err) {
+    console.error(err);
+    toast('The NYC street data couldn’t load. Check your connection and reopen the app.', 10000);
+    return;
   }
+  view.setHoods(outlines);
+  await rebuild();
   centerOnMe({ quiet: true });
 }
 
-// ---------------------------------------------------------------- areas
-async function addArea() {
-  const bbox = view.getBBox();
-  const km2 = (haversine([bbox[0], bbox[1]], [bbox[0], bbox[3]]) / 1000) *
-    (haversine([bbox[0], bbox[1]], [bbox[2], bbox[1]]) / 1000);
-  closeSheet();
-  // Street data built into this site is fast and always available; the public
-  // servers are only for places outside it.
-  const index = await loadIndex();
-  let builtIn = covers(index, bbox);
-  const limit = builtIn ? MAX_AREA_KM2_BUILT_IN : MAX_AREA_KM2;
-  if (km2 > limit) {
-    toast(`Zoom in a little: that's ${km2.toFixed(0)} km², the limit is ${limit} km² per area.`, 5000);
-    return;
-  }
-  if (addingArea) return;
-  addingArea = true;
-  const center = view.getCenter();
-  const buttons = [$('#btn-add-area'), $('#btn-empty-add')];
-  buttons.forEach((btn) => { btn.disabled = true; btn.dataset.label ||= btn.textContent; btn.textContent = 'Downloading streets…'; });
-  const started = Date.now();
-  let server = 1;
-  const progress = () => {
-    const s = Math.round((Date.now() - started) / 1000);
-    toast(builtIn ? 'Loading streets…' : `Downloading streets… ${s} s${server > 1 ? ` · trying backup server ${server - 1}` : ''}`, 5000);
-  };
-  progress();
-  const ticker = setInterval(progress, 1000);
-  try {
-    let osm = builtIn ? await fetchFromPack(index, bbox).catch(() => null) : null;
-    // Safety net: if the built-in data is missing or has no streets here, ask the public servers.
-    if (!osm?.elements.some((el) => el.type === 'way')) {
-      builtIn = false;
-      osm = await fetchOverpass(overpassQuery(bbox), { onServer: (n) => { server = n; } });
-    }
-    const slim = [];
-    for (const el of osm.elements) {
-      if (el.type === 'node') slim.push({ type: 'node', id: el.id, lat: el.lat, lon: el.lon });
-      else if (el.type === 'way') slim.push({ type: 'way', id: el.id, nodes: el.nodes, tags: { name: el.tags?.name, highway: el.tags?.highway } });
-    }
-    clearInterval(ticker);
-    if (!slim.some((el) => el.type === 'way')) { toast('No walkable streets found here.', 4000); return; }
-    let name = builtIn ? nearestPlace(index, center, { broad: km2 > 8 }) : '';
-    if (!name) {
-      toast('Naming the area…', 10000);
-      name = await fetchOverpass(placeQuery(center), { timeoutMs: 8000, servers: 1 }).then(placeName).catch(() => '');
-    }
-    const area = { name: name || `Area ${areas.length + 1}`, bbox, osm: slim, createdAt: Date.now() };
-    area.id = await db.put('areas', area);
-    const before = engine.blocks.size;
-    areas.push(area);
-    rebuild();
-    toast(`Added ${area.name} · ${(engine.blocks.size - before).toLocaleString()} blocks`, 3500);
-  } catch (err) {
-    console.error('Street download failed:', err.message);
-    toast(navigator.onLine === false
-      ? 'You’re offline. Connect to the internet to download streets.'
-      : 'The free street servers are busy or slow right now. Try again in a minute, or zoom in to a smaller area.', 7000);
-  } finally {
-    clearInterval(ticker);
-    addingArea = false;
-    buttons.forEach((btn) => { btn.disabled = false; btn.textContent = btn.dataset.label; });
-  }
-}
-let addingArea = false;
+// ---------------------------------------------------------------- neighborhoods
+// Zoomed in far enough, load the blocks of the neighborhoods on screen.
+const onMapMoved = throttle(() => {
+  if (!city.index) return;
+  renderHoodChip();
+  if (view.getZoom() < BLOCKS_MIN_ZOOM - 0.5) return;
+  const ids = city.hoodsIn(view.getBBox()).filter((id) => !city.loaded.has(id));
+  if (ids.length && ids.length <= MAX_VISIBLE_HOODS) city.ensure(ids).catch(() => {});
+}, 400);
 
-// Tries each street server with a time limit. Overpass reports some failures
-// (like a query timing out) as a normal answer with a "remark", so check that too.
-async function fetchOverpass(query, { timeoutMs = OVERPASS_TIMEOUT_MS, servers = OVERPASS.length, onServer } = {}) {
-  const problems = [];
-  for (const [i, url] of OVERPASS.slice(0, servers).entries()) {
-    onServer?.(i + 1);
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    try {
-      const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }), signal: ctrl.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      if (json.remark && /error|timed out|out of memory/i.test(json.remark)) throw new Error(json.remark);
-      return json;
-    } catch (err) {
-      problems.push(`${new URL(url).host}: ${err.name === 'AbortError' ? `no answer in ${timeoutMs / 1000} s` : err.message}`);
-    } finally {
-      clearTimeout(timer);
-    }
+// The neighborhood in the middle of the map.
+function hoodAtCenter() {
+  if (!outlines) return null;
+  const c = view.getCenter();
+  for (const [i, h] of city.index.hoods.entries()) {
+    const [s, w, n, e] = h.bbox;
+    if (c[0] < s || c[0] > n || c[1] < w || c[1] > e) continue;
+    if (pointInMultiPolygon(c, outlines.features[i].geometry.coordinates)) return h;
   }
-  throw new Error(problems.join(' | '));
+  return null;
+}
+
+function hoodPct(id) {
+  const h = lastSummary?.hoods.find((x) => x.id === id);
+  return h && h.length ? (100 * h.walkedLength) / h.length : 0;
+}
+
+function renderHoodChip() {
+  const chip = $('#chip-hood');
+  const h = view.getZoom() >= 12 ? hoodAtCenter() : null;
+  chip.hidden = !h;
+  if (!h) return;
+  chip.dataset.id = h.id;
+  $('#chip-hood-name').textContent = h.name;
+  $('#chip-hood-pct').textContent = fmtPct(hoodPct(h.id));
+}
+
+let hoodLitTimer;
+function openHood(id) {
+  const h = city.hoods.get(id);
+  if (!h) return;
+  closeSheet();
+  const [s, w, n, e] = h.bbox;
+  view.fitPoints([[s, w], [n, e]], { maxZoom: 16 });
+  view.highlightHood(h.idx);
+  clearTimeout(hoodLitTimer);
+  hoodLitTimer = setTimeout(() => view.highlightHood(null), 4000);
+  city.ensure([id]).catch(() => toast('Couldn’t load that neighborhood. Check your connection.'));
 }
 
 // ---------------------------------------------------------------- recording
@@ -420,6 +384,7 @@ async function startWalk() {
     still: new StillnessDetector(), paused: false, pausedAt: 0, pausedMs: 0, watchId: null,
   };
   track.id = await db.put('tracks', track);
+  city.startLive(rec.points);
   view.setLive([]);
   startGps('high');
   rec.timer = setInterval(tick, 1000);
@@ -476,12 +441,12 @@ function onPosition(pos) {
   else rec.liveDirty = true;
   if (last) {
     rec.dist += haversine(last, p);
-    const changed = engine.addSegment(last, p);
+    const changed = city.addLiveSegment(last, p);
     if (changed.size) {
       for (const id of changed) {
-        if (!rec.newBlocks.has(id) && engine.isWalked(id)) {
+        if (!rec.newBlocks.has(id) && city.isWalked(id)) {
           rec.newBlocks.add(id);
-          if (!completedAt.has(id)) completedAt.set(id, rec.track.startedAt);
+          if (!city.completedAt.has(id)) city.completedAt.set(id, rec.track.startedAt);
           celebrate(id);
         }
       }
@@ -565,7 +530,8 @@ function resume() {
 function celebrate(id) {
   navigator.vibrate?.(35);
   if (asleep()) return;
-  const { block } = engine.blocks.get(id);
+  const block = city.block(id);
+  if (!block) return;
   const where = crossStreets(block);
   toast(`✓ ${block.name || 'Block'} done${where ? ` · ${where}` : ''}`, 2500);
   view.highlight([id], true);
@@ -588,6 +554,7 @@ async function stopWalk() {
   clearInterval(r.timer);
   clearTimeout(darkTimer);
   rec = null;
+  city.stopLive();
   releaseWake();
   exitPocket();
   view.setLive([]);
@@ -614,7 +581,7 @@ async function stopWalk() {
   });
   await db.put('tracks', r.track);
   tracks.push(r.track);
-  newByTrack.set(r.track.id, r.newBlocks.size);
+  city.setTracks(tracks); // replays loaded neighborhoods with the saved walk
   drawTracks();
   renderStats();
   toast(`Walk saved · ${km(r.dist)} · ${r.newBlocks.size} new block${r.newBlocks.size === 1 ? '' : 's'}`, 4000);
@@ -697,6 +664,7 @@ function exitPocket() {
 // Catch the map and numbers up after the screen was dark or the app hidden.
 function wakeUpUi() {
   if (asleep()) return;
+  if (blocksDirty) { blocksDirty = false; drawBlocks(); }
   scheduleFlush();
   if (statsDirty) renderStats();
   if (rec) {
@@ -831,10 +799,10 @@ async function importFiles(files) {
 }
 
 async function wipe() {
-  if (!confirm('Delete all walks, areas and settings on this device? Export a backup first if you want to keep them.')) return;
+  if (!confirm('Delete all your walks and progress on this device? Export a backup first if you want to keep them.')) return;
   if (rec) await stopWalk();
   await Promise.all(['tracks', 'areas', 'overrides'].map((s) => db.clear(s)));
-  tracks = []; areas = []; overrides = {};
+  tracks = []; overrides = {};
   rebuild();
   closeSheet();
   toast('All data deleted.');
@@ -855,7 +823,7 @@ async function renderStorageInfo() {
 }
 
 // ---------------------------------------------------------------- sheet
-let activeTab = 'streets';
+let activeTab = 'hoods';
 let streetFilter = 'progress';
 
 function openSheet() {
@@ -872,7 +840,7 @@ function closeSheet() {
 function renderSheet() {
   if (activeTab === 'streets') renderStreets();
   if (activeTab === 'walks') renderWalks();
-  if (activeTab === 'areas') renderAreas();
+  if (activeTab === 'hoods') renderHoods();
   if (activeTab === 'settings') renderSettings();
 }
 
@@ -892,7 +860,7 @@ function row({ title, sub, frac, pct, badge, actions = [], onOpen }) {
   if (pct != null) {
     const p = document.createElement('span');
     p.className = 'pct' + (pct >= 100 ? ' done' : '');
-    p.textContent = `${Math.floor(pct)}%`;
+    p.textContent = pct > 0 && pct < 1 ? '<1%' : `${Math.floor(pct)}%`;
     el.appendChild(p);
   }
   for (const [label, fn] of actions) {
@@ -913,45 +881,62 @@ function emptyRow(text) {
 }
 
 const STREET_FILTERS = {
-  progress: { test: (f) => f > 0 && f < 1, sort: (a, b) => b.frac - a.frac, empty: 'Nothing in progress yet. Start a walk!' },
-  todo: { test: (f) => f === 0, sort: (a, b) => b.totalLen - a.totalLen, empty: 'You’ve started every street. Nice!' },
+  progress: { test: (f) => f > 0 && f < 1, sort: (a, b) => b.frac - a.frac || b.length - a.length, empty: 'Nothing in progress yet. Start a walk!' },
+  todo: { test: (f) => f === 0, sort: (a, b) => b.length - a.length, empty: 'You’ve started every street. Wow.' },
   done: { test: (f) => f >= 1, sort: (a, b) => a.name.localeCompare(b.name), empty: 'No streets finished yet.' },
-  all: { test: () => true, sort: (a, b) => b.frac - a.frac || b.totalLen - a.totalLen, empty: 'No streets match.' },
+  all: { test: () => true, sort: (a, b) => b.frac - a.frac || b.length - a.length, empty: 'No streets match.' },
 };
 
-function renderStreets() {
+async function loadStreetTotals() {
+  streetTotals ||= fetch(CITY_BASE + 'streets.json').then((r) => r.json()).catch(() => null);
+  return streetTotals;
+}
+
+async function renderStreets() {
   const list = $('#street-list');
+  const totals = await loadStreetTotals();
   list.replaceChildren();
-  if (!engine.blocks.size) return list.append(emptyRow('Add an area to see its streets here.'));
+  if (!totals) return list.append(emptyRow('The street list couldn’t load. Check your connection.'));
+  const walked = city.streetProgress(overrides);
   const q = $('#street-search').value.trim().toLowerCase();
   const f = STREET_FILTERS[streetFilter];
-  const streets = (lastSummary?.streets || [])
-    .map((s) => ({ ...s, frac: s.totalLen ? s.walkedLen / s.totalLen : 0 }))
-    .filter((s) => (q ? s.name.toLowerCase().includes(q) : f.test(s.frac)))
-    .sort(f.sort);
+  const streets = [];
+  for (const [name, borough, blocks, length, hoods] of totals) {
+    const w = walked.get(`${name}|${borough}`);
+    const frac = w ? Math.min(1, w.walkedLength / length) : 0;
+    if (q ? !name.toLowerCase().includes(q) : !f.test(frac)) continue;
+    streets.push({ name, borough, blocks, length, hoods, walked: w?.walked || 0, frac });
+  }
+  streets.sort(f.sort);
   if (!streets.length) list.append(emptyRow(q ? 'No streets match.' : f.empty));
-  for (const s of streets.slice(0, 300)) {
+  for (const st of streets.slice(0, 200)) {
     list.append(row({
-      title: s.name,
-      sub: `${s.walked} of ${s.total} block${s.total === 1 ? '' : 's'} · ${km(s.totalLen)}`,
-      frac: s.frac,
-      pct: s.frac * 100,
-      onOpen: () => showStreet(s.name),
+      title: st.name,
+      sub: `${st.borough} · ${st.walked} of ${st.blocks} block${st.blocks === 1 ? '' : 's'} · ${km(st.length)}`,
+      frac: st.frac,
+      pct: st.frac * 100,
+      onOpen: () => showStreet(st),
     }));
   }
+  if (streets.length > 200) list.append(emptyRow(`Showing 200 of ${streets.length.toLocaleString()}. Search to find others.`));
 }
 
 let highlightTimer;
-function showStreet(name) {
+async function showStreet(st) {
+  closeSheet();
+  const hoodIds = st.hoods.map((i) => city.index.hoods[i].id);
+  await city.ensure(hoodIds).catch(() => {});
   const ids = [];
   const points = [];
-  for (const [id, s] of engine.blocks) {
-    if ((s.block.name || '(unnamed)') !== name) continue;
-    ids.push(id);
-    points.push(...s.block.coords);
+  for (const id of hoodIds) {
+    for (const b of city.loaded.get(id)?.blocks || []) {
+      if (b.name !== st.name) continue;
+      ids.push(b.id);
+      points.push(...b.coords);
+    }
   }
   if (!ids.length) return;
-  closeSheet();
+  drawBlocks();
   view.highlight(ids, true);
   view.fitPoints(points);
   clearTimeout(highlightTimer);
@@ -966,7 +951,7 @@ function renderWalks() {
     const dist = t.distance ?? polylineLength(t.points);
     const when = new Date(t.startedAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     const mins = t.duration ? Math.round(t.duration / 60000) : t.endedAt ? Math.round((t.endedAt - t.startedAt) / 60000) : 0;
-    const n = newByTrack.get(t.id) || 0;
+    const n = city.newByTrack.get(t.id) || 0;
     list.append(row({
       title: when,
       sub: [km(dist), mins ? `${mins} min` : '', t.source === 'gpx' ? 'imported' : ''].filter(Boolean).join(' · '),
@@ -975,7 +960,7 @@ function renderWalks() {
         if (!confirm('Delete this walk?')) return;
         await db.delete('tracks', t.id);
         tracks = tracks.filter((x) => x !== t);
-        rebuild();
+        await rebuild();
       }]],
       onOpen: () => {
         closeSheet();
@@ -985,44 +970,42 @@ function renderWalks() {
   }
 }
 
-function renderAreas() {
-  const list = $('#area-list');
+// Neighborhoods grouped by borough, most-walked first.
+function renderHoods() {
+  const list = $('#hood-list');
   list.replaceChildren();
-  if (!areas.length) return list.append(emptyRow('No areas yet.'));
-  for (const a of areas) {
-    const [s, w, n, e] = a.bbox;
-    const inA = (p) => p[0] >= s && p[0] <= n && p[1] >= w && p[1] <= e;
-    let tot = 0, done = 0, count = 0;
-    for (const [id, st] of engine.blocks) {
-      if (!inA(midpoint(st.block.coords))) continue;
-      count++;
-      tot += st.block.length;
-      if (isDone(id)) done += st.block.length;
+  if (!lastSummary) return list.append(emptyRow('Loading neighborhoods…'));
+  const q = $('#hood-search').value.trim().toLowerCase();
+  const frac = (x) => (x.length ? x.walkedLength / x.length : 0);
+  const boroughs = [...lastSummary.boroughs].sort((a, b) => frac(b) - frac(a) || a.name.localeCompare(b.name));
+  let shown = 0;
+  for (const boro of boroughs) {
+    const hoods = lastSummary.hoods
+      .filter((h) => h.borough === boro.name && (!q || h.name.toLowerCase().includes(q)))
+      .sort((a, b) => frac(b) - frac(a) || a.name.localeCompare(b.name));
+    if (!hoods.length) continue;
+    if (!q) {
+      const head = row({
+        title: boro.name,
+        sub: `${boro.walked.toLocaleString()} of ${boro.blocks.toLocaleString()} blocks · ${km(boro.walkedLength)} of ${km(boro.length)}`,
+        frac: frac(boro),
+        pct: frac(boro) * 100,
+      });
+      head.classList.add('group-head');
+      list.append(head);
     }
-    const frac = tot ? done / tot : 0;
-    list.append(row({
-      title: a.name,
-      sub: `${count.toLocaleString()} blocks · ${km(tot)}`,
-      frac,
-      pct: frac * 100,
-      actions: [
-        ['Rename', async () => {
-          const name = prompt('Area name', a.name);
-          if (!name) return;
-          a.name = name.trim();
-          await db.put('areas', a);
-          renderAreas();
-        }],
-        ['Delete', async () => {
-          if (!confirm(`Remove "${a.name}"? Your walks are kept.`)) return;
-          await db.delete('areas', a.id);
-          areas = areas.filter((x) => x !== a);
-          rebuild();
-        }],
-      ],
-      onOpen: () => { closeSheet(); view.fitPoints([[s, w], [n, e]]); },
-    }));
+    for (const h of hoods) {
+      shown++;
+      list.append(row({
+        title: h.name,
+        sub: `${q ? `${h.borough} · ` : ''}${h.walked.toLocaleString()} of ${h.blocks.toLocaleString()} blocks · ${km(h.length)}`,
+        frac: frac(h),
+        pct: frac(h) * 100,
+        onOpen: () => openHood(h.id),
+      }));
+    }
   }
+  if (!shown) list.append(emptyRow('No neighborhoods match.'));
 }
 
 function renderSettings() {
@@ -1091,8 +1074,6 @@ $('#btn-record').addEventListener('click', () => (rec ? stopWalk() : startWalk()
 $('#btn-locate').addEventListener('click', locateOnce);
 $('#btn-pocket').addEventListener('click', enterPocket);
 $('#btn-menu').addEventListener('click', openSheet);
-$('#btn-empty-add').addEventListener('click', addArea);
-$('#btn-empty-locate').addEventListener('click', locateOnce);
 document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 document.querySelectorAll('#street-filters button').forEach((b) => b.addEventListener('click', () => {
   streetFilter = b.dataset.f;
@@ -1100,7 +1081,8 @@ document.querySelectorAll('#street-filters button').forEach((b) => b.addEventLis
   renderStreets();
 }));
 $('#street-search').addEventListener('input', renderStreets);
-$('#btn-add-area').addEventListener('click', addArea);
+$('#hood-search').addEventListener('input', renderHoods);
+$('#chip-hood').addEventListener('click', () => openHood($('#chip-hood').dataset.id));
 $('#btn-export-backup').addEventListener('click', exportBackup);
 $('#btn-export-gpx').addEventListener('click', exportGpx);
 $('#btn-import').addEventListener('click', () => $('#file-input').click());
@@ -1124,4 +1106,4 @@ else if (!token) showSetup();
 else toast('The map couldn’t load. Check your connection and reopen the app.', 60000);
 
 // Handy for debugging from the browser console.
-window.walktracker = { engine, db, rebuild, settings, view, get rec() { return rec; } };
+window.walktracker = { city, db, rebuild, settings, view, get rec() { return rec; } };

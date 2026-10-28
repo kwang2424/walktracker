@@ -6,6 +6,7 @@
 const STYLE = 'mapbox://styles/mapbox/standard';
 const STATE = { none: 0, partial: 1, walked: 2 };
 const LIVE_EVERY_MS = 2000; // redraw the live walk line at most this often
+export const BLOCKS_MIN_ZOOM = 13; // below this, neighborhoods are shown shaded instead of blocks
 
 const ll = (p) => [p[1], p[0]];
 const collection = (features) => ({ type: 'FeatureCollection', features });
@@ -26,7 +27,7 @@ function basemapConfig({ theme, dark }) {
 }
 
 export class MapView {
-  constructor(container, { token, theme = 'faded', dark = false, colors, onBlockClick, onUserMove, onAuthError } = {}) {
+  constructor(container, { token, theme = 'faded', dark = false, colors, onBlockClick, onHoodClick, onUserMove, onMoveEnd, onAuthError } = {}) {
     this.colors = colors;
     this.look = { theme, dark };
     this.idxOf = new Map(); // block id -> numeric feature id
@@ -37,6 +38,9 @@ export class MapView {
     this.tracksData = collection([]);
     this.liveData = collection([]);
     this.tracksVisible = true;
+    this.hoodsData = collection([]);
+    this.hoodStates = new Map(); // feature id -> fraction walked
+    this.hoodLit = null;
     this.popup = null;
     this.me = null;
 
@@ -60,11 +64,18 @@ export class MapView {
     this.styleLoaded = false;
     this.map.on('style.load', () => { this.styleLoaded = true; this._addLayers(); });
     this.map.on('dragstart', () => onUserMove?.());
+    this.map.on('moveend', () => onMoveEnd?.());
+    // Zoomed out, tapping a neighborhood zooms into it. Zoomed in, taps go to blocks.
+    this.map.on('click', 'hoods-fill', (e) => {
+      if (this.map.getZoom() >= BLOCKS_MIN_ZOOM) return;
+      const f = e.features?.[0];
+      if (f && onHoodClick) onHoodClick(f.id);
+    });
     // Only a refused token that stops the map loading at all counts as a token
     // problem. A single refused tile later on shouldn't send you back to setup.
     this.map.on('error', (e) => {
       const status = e?.error?.status;
-      if (status !== 401 && status !== 403) return;
+      if (status !== 401 && status !== 403) { console.warn('Map:', e?.error?.message || e); return; }
       if (this.styleLoaded) console.warn('Mapbox refused a request', status, e?.error?.url || '');
       else onAuthError?.(status);
     });
@@ -101,7 +112,29 @@ export class MapView {
     m.addSource('tracks', { type: 'geojson', data: this.tracksData });
     m.addSource('live', { type: 'geojson', data: this.liveData });
     m.addSource('blocks', { type: 'geojson', data: this.blocksData });
+    m.addSource('hoods', { type: 'geojson', data: this.hoodsData });
     const round = { 'line-cap': 'round', 'line-join': 'round' };
+    // Neighborhoods: shaded by progress when zoomed out, a thin outline when zoomed in.
+    const pct = ['coalesce', ['feature-state', 'pct'], 0];
+    add({
+      id: 'hoods-fill', type: 'fill', source: 'hoods',
+      paint: {
+        'fill-color': ['interpolate', ['linear'], pct, 0, c.unwalked, 0.0001, '#a7f3d0', 0.2, '#34d399', 1, '#047857'],
+        'fill-opacity': ['interpolate', ['linear'], ['zoom'], 10, ['case', ['>', pct, 0], 0.7, 0.22], 12.5, ['case', ['>', pct, 0], 0.5, 0.15], BLOCKS_MIN_ZOOM + 1, 0],
+        'fill-emissive-strength': 1,
+      },
+    });
+    add({
+      id: 'hoods-line', type: 'line', source: 'hoods', layout: round,
+      paint: {
+        'line-color': ['case', ['boolean', ['feature-state', 'hl'], false], c.walked, c.unwalked],
+        'line-width': ['interpolate', ['linear'], ['zoom'],
+          10, ['case', ['boolean', ['feature-state', 'hl'], false], 3, 0.8],
+          14, ['case', ['boolean', ['feature-state', 'hl'], false], 4, 1.6]],
+        'line-opacity': ['case', ['boolean', ['feature-state', 'hl'], false], 1, 0.8],
+        'line-emissive-strength': 1,
+      },
+    });
     add({
       id: 'tracks', type: 'line', source: 'tracks',
       layout: { ...round, visibility: this.tracksVisible ? 'visible' : 'none' },
@@ -115,7 +148,7 @@ export class MapView {
     const hl = ['boolean', ['feature-state', 'hl'], false];
     const width = (none, partial, walked, lit) => ['case', hl, lit, ['match', s, 2, walked, 1, partial, none]];
     add({
-      id: 'blocks', type: 'line', source: 'blocks', layout: round,
+      id: 'blocks', type: 'line', source: 'blocks', layout: round, minzoom: BLOCKS_MIN_ZOOM - 0.5,
       paint: {
         'line-color': ['match', s, 2, c.walked, 1, c.partial, c.unwalked],
         'line-opacity': ['match', s, 2, 1, 1, 0.95, 0.7],
@@ -128,7 +161,7 @@ export class MapView {
     });
     // Invisible, extra-wide copy so blocks are easy to tap.
     m.addLayer({
-      id: 'blocks-hit', type: 'line', source: 'blocks', layout: round,
+      id: 'blocks-hit', type: 'line', source: 'blocks', layout: round, minzoom: BLOCKS_MIN_ZOOM,
       paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 22 },
     });
     this._applyAllStates();
@@ -142,6 +175,27 @@ export class MapView {
     if (!this._ready()) return;
     this.states.forEach((s, i) => this.map.setFeatureState({ source: 'blocks', id: i }, { s }));
     for (const i of this.highlighted) this.map.setFeatureState({ source: 'blocks', id: i }, { hl: true });
+    for (const [i, pct] of this.hoodStates) this.map.setFeatureState({ source: 'hoods', id: i }, { pct });
+    if (this.hoodLit != null) this.map.setFeatureState({ source: 'hoods', id: this.hoodLit }, { hl: true });
+  }
+
+  // Neighborhood outlines (GeoJSON with numeric feature ids).
+  setHoods(geojson) {
+    this.hoodsData = geojson;
+    this.map.getSource('hoods')?.setData(geojson);
+    this._applyAllStates();
+  }
+
+  setHoodProgress(i, pct) {
+    if (this.hoodStates.get(i) === pct) return;
+    this.hoodStates.set(i, pct);
+    if (this._ready()) this.map.setFeatureState({ source: 'hoods', id: i }, { pct });
+  }
+
+  highlightHood(i) {
+    if (this._ready() && this.hoodLit != null) this.map.setFeatureState({ source: 'hoods', id: this.hoodLit }, { hl: false });
+    this.hoodLit = i;
+    if (this._ready() && i != null) this.map.setFeatureState({ source: 'hoods', id: i }, { hl: true });
   }
 
   // theme: 'faded' | 'monochrome' | 'default'; dark: night lighting.
@@ -159,6 +213,8 @@ export class MapView {
     if (!this._ready()) return;
     const s = ['coalesce', ['feature-state', 's'], 0];
     this.map.setPaintProperty('blocks', 'line-color', ['match', s, 2, colors.walked, 1, colors.partial, colors.unwalked]);
+    const pct = ['coalesce', ['feature-state', 'pct'], 0];
+    this.map.setPaintProperty('hoods-fill', 'fill-color', ['interpolate', ['linear'], pct, 0, colors.unwalked, 0.0001, '#a7f3d0', 0.2, '#34d399', 1, '#047857']);
     this.map.setPaintProperty('tracks', 'line-color', colors.track);
     this.map.setPaintProperty('live', 'line-color', colors.track);
   }

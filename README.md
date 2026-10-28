@@ -1,19 +1,19 @@
 # WalkTracker
 
-Walk every block of your city, like WalkNYC or CityStrides, except **your data stays on your device**.
+Walk every block of New York City, like WalkNYC, except **your data stays on your device**.
 No account, no server, and no tracking. It's a small web app you host yourself for free and add to your phone's home screen.
 
 ## What it does
 
 - **Record walks** with your phone's GPS. Blocks turn green as you walk them, with a buzz and a
   "✓ E 15th St done · 1st Ave → 2nd Ave" note each time you finish one.
-- **Progress**: a progress ring, blocks and km walked, this week's distance and new blocks, and your daily streak.
-- **Per-street progress** with filters: in progress, not started, done.
-- **Any city**: pan the map to a neighborhood and tap *Add streets on screen*. Streets come from OpenStreetMap
-  and the area is named after the neighborhood automatically.
-- **Built-in street data for New York City**: adding an area in NYC loads in about a second from the app's own
-  site, with no outside server involved, and you can add up to 120 km² at once (all of Manhattan is ~60).
-  Other places use the public Overpass servers, which are often busy.
+- **All of NYC**: every block in the five boroughs (about 102,000 blocks, 10,000 km of streets) counts toward
+  your progress, with no setup.
+- **Official neighborhoods**: progress for each of NYC's 2020 Neighborhood Tabulation Areas, grouped by borough.
+  Zoomed out, neighborhoods are shaded by how much you've walked; tap one to zoom in. A chip shows the
+  neighborhood you're looking at and its %.
+- **Progress**: NYC-wide ring, blocks and km walked, this week's distance and new blocks, and your daily streak.
+- **Per-street progress** for every street in each borough, with filters: in progress, not started, done.
 - **Import past walks** from GPX files (Strava, Garmin, Google Takeout, Apple Health via an export app, etc.).
 - **Fix mistakes**: tap any block to mark it walked or not walked by hand.
 - **Own your data**: export a full backup (`.json`) or all walks as `.gpx` at any time. Import the backup on another device.
@@ -75,8 +75,8 @@ Any static host works too (Netlify, Cloudflare Pages, your own server). HTTPS is
 - **What Mapbox receives:** map tile requests for the areas you view (with your token and IP address), a
   "map load" count once per app launch with a random anonymous ID, and a daily active-user ping. Mapbox's
   performance reports are switched off. Your walks, GPS positions and progress are never sent.
-- Street data inside the built-in regions comes from the app's own site. Elsewhere it comes from public
-  Overpass servers (`overpass-api.de` and two backups, no account). Only the area you add is sent, never your walks.
+- Street and neighborhood data comes from the app's own site; no other service is involved.
+- NYC only for now. Other cities would need their own neighborhood boundaries (see below).
 
 ## Development
 
@@ -88,26 +88,29 @@ npm test          # unit tests (Node 20+)
 npm start         # serve at http://localhost:8080
 ```
 
-### Built-in street data
+### NYC street data
 
-The deploy workflow downloads OpenStreetMap extracts for the regions in `scripts/regions.json` and turns
-them into small tiles under `data/streets/`. It runs on every deploy and every Monday, so the data stays fresh.
-The tiles aren't committed.
+The deploy workflow builds NYC's blocks and publishes them with the site under `data/nyc/` (not committed).
+It runs on every deploy and every Monday, so street changes in OpenStreetMap show up within a week.
 
-It's built so a download site being down never blocks an update:
-1. Each region lists sources in order: [BBBike](https://download.bbbike.org/osm/bbbike/) first, then
-   [Geofabrik](https://download.geofabrik.de/) (a bigger file, clipped to the region's box).
-2. If every source fails, the last good download is reused from the GitHub Actions cache.
-3. If there's still nothing, the site deploys without built-in data and the app uses the public servers.
+1. `scripts/download_extracts.py` downloads the OpenStreetMap extract listed in `scripts/regions.json`:
+   [BBBike](https://download.bbbike.org/osm/bbbike/) first, then [Geofabrik](https://download.geofabrik.de/)
+   as a backup. If both are down, the last good download is reused from the GitHub Actions cache.
+2. `scripts/extract_streets.py` pulls out the walkable streets.
+3. `scripts/build_city.mjs` splits them into blocks (with the same code the app uses) and files each block
+   under the neighborhood its midpoint is in, using NYC's official 2020 Neighborhood Tabulation Areas
+   (`scripts/data/nyc-neighborhoods-2020.geojson`, from NYC Open Data). Blocks outside the five boroughs are dropped.
 
-To add a city, add an entry with its download URL(s) and bounding box to `regions.json`.
+The phone downloads a small index and the neighborhood outlines (~85 KB) at startup, then only the
+neighborhoods you look at or have walked in (~20–60 KB each).
 
 To build locally:
 
 ```sh
 pip install osmium
 python3 scripts/download_extracts.py scripts/regions.json osm
-python3 scripts/build_streets.py data/streets scripts/regions.json osm
+python3 scripts/extract_streets.py streets.json scripts/regions.json osm
+node scripts/build_city.mjs streets.json data/nyc
 ```
 
 | File | What's in it |
@@ -117,9 +120,11 @@ python3 scripts/build_streets.py data/streets scripts/regions.json osm
 | `js/power.js` | Stillness and motion detection for smart GPS |
 | `js/stats.js` | Weekly stats, streaks, when each block was finished |
 | `js/db.js` | On-device storage (IndexedDB), backup export/import |
-| `js/streets.js` | Loads built-in street tiles for an area |
-| `scripts/download_extracts.py` | Downloads the OpenStreetMap extracts, with fallbacks |
-| `scripts/build_streets.py` | Builds the street tiles from an OpenStreetMap extract |
+| `js/city.js` | Loads NYC neighborhoods on demand and tracks progress in each |
+| `scripts/download_extracts.py` | Downloads the OpenStreetMap extract, with fallbacks |
+| `scripts/extract_streets.py` | Pulls the walkable streets out of the extract |
+| `scripts/build_city.mjs`, `scripts/citylib.mjs` | Splits NYC into blocks and files them by neighborhood |
+| `scripts/data/nyc-neighborhoods-2020.geojson` | NYC's official neighborhood boundaries |
 | `js/mapview.js` | The Mapbox map: look settings, block and walk layers |
 | `js/config.js` | Optional Mapbox token for all devices |
 | `js/app.js` | Recording, stats, menus |

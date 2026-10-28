@@ -1,9 +1,14 @@
 {
-  "_comment": "Street data built into the site at deploy time. Each region lists download URLs to try in order, and a bounding box [south, west, north, east] that the app treats as covered. BBBike has ~200 cities: https://download.bbbike.org/osm/bbbike/ . Geofabrik is a fallback: https://download.geofabrik.de/ (bigger files; only the bbox is kept).",
+  "_comment": "OpenStreetMap downloads for the NYC street data, tried in order. bbox is [south, west, north, east]; only streets inside it are kept, and build_city.mjs then keeps only blocks inside the five boroughs.",
   "regions": [
     {
       "name": "NewYork",
-      "bbox": [40.475, -74.37, 40.98, -73.65],
+      "bbox": [
+        40.475,
+        -74.37,
+        40.98,
+        -73.65
+      ],
       "urls": [
         "https://download.bbbike.org/osm/bbbike/NewYork/NewYork.osm.pbf",
         "https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf"

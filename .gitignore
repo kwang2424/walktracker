@@ -1,5 +1,5 @@
 node_modules/
 .DS_Store
-# Built at deploy time by scripts/build_streets.py
-data/streets/
+# Built at deploy time by scripts/build_city.mjs
+data/nyc/
 __pycache__/

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { StillnessDetector, MotionWake } from '../js/power.js';
 import { streak, weekStats, startOfWeek, replayTracks } from '../js/stats.js';
-import { CoverageEngine, buildBlocks, placeName, overpassQuery } from '../js/geo.js';
+import { CoverageEngine, buildBlocks } from '../js/geo.js';
 
 const LAT = 40.73, LON = -73.99;
 const north = (m) => LAT + m / 111195;
@@ -77,15 +77,4 @@ test('replayTracks credits each block to the first walk that finished it', () =>
   assert.equal([...completedAt.values()][0], 1e6);
   assert.equal(newByTrack.get(1), 1);
   assert.equal(newByTrack.get(2), 0);
-});
-
-test('placeName picks the most local named place', () => {
-  const osm = { elements: [
-    { type: 'area', id: 1, tags: { name: 'New York', place: 'city' } },
-    { type: 'area', id: 2, tags: { name: 'Manhattan', place: 'borough' } },
-    { type: 'area', id: 3, tags: { name: 'Gramercy', place: 'neighbourhood' } },
-  ] };
-  assert.equal(placeName(osm), 'Gramercy');
-  assert.equal(placeName({ elements: [] }), '');
-  assert.match(overpassQuery([1, 2, 3, 4], [2, 3]), /is_in\(2,3\)/);
 });

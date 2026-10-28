@@ -1,5 +1,5 @@
 import {
-  CoverageEngine, buildBlocks, overpassQuery, placeName, summarize, haversine, polylineLength,
+  CoverageEngine, buildBlocks, overpassQuery, placeQuery, placeName, summarize, haversine, polylineLength,
 } from './geo.js';
 import { parseGpx, toGpx } from './gpx.js';
 import { db } from './db.js';
@@ -8,11 +8,15 @@ import { replayTracks, streak, weekStats } from './stats.js';
 import { MapView } from './mapview.js';
 import { MAPBOX_TOKEN } from './config.js';
 
+// Free public OpenStreetMap servers, tried in order. They're sometimes busy,
+// so each gets a time limit before the next one is tried.
 const OVERPASS = [
   'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
-const MAX_AREA_KM2 = 30;
+const OVERPASS_TIMEOUT_MS = 30000;
+const MAX_AREA_KM2 = 20; // bigger areas often time out on the free street servers
 const MIN_ACCURACY_M = 35; // ignore GPS fixes worse than this
 const MIN_STEP_M = 4; // ignore jitter while standing still
 const SAVE_EVERY_MS = 20000;
@@ -295,6 +299,7 @@ async function load() {
   } else {
     view.setView([40.7306, -73.9866], 15);
   }
+  centerOnMe({ quiet: true });
 }
 
 // ---------------------------------------------------------------- areas
@@ -307,43 +312,70 @@ async function addArea() {
     toast(`Zoom in a little: that's ${km2.toFixed(0)} km², the limit is ${MAX_AREA_KM2} km² per area.`, 5000);
     return;
   }
+  if (addingArea) return;
+  addingArea = true;
+  const center = view.getCenter();
   const buttons = [$('#btn-add-area'), $('#btn-empty-add')];
   buttons.forEach((btn) => { btn.disabled = true; btn.dataset.label ||= btn.textContent; btn.textContent = 'Downloading streets…'; });
-  toast('Downloading streets…', 60000);
+  const started = Date.now();
+  let server = 1;
+  const progress = () => {
+    const s = Math.round((Date.now() - started) / 1000);
+    toast(`Downloading streets… ${s} s${server > 1 ? ` · trying backup server ${server - 1}` : ''}`, 5000);
+  };
+  progress();
+  const ticker = setInterval(progress, 1000);
   try {
-    const osm = await fetchOverpass(overpassQuery(bbox, view.getCenter()));
+    const osm = await fetchOverpass(overpassQuery(bbox), { onServer: (n) => { server = n; } });
     const slim = [];
     for (const el of osm.elements) {
       if (el.type === 'node') slim.push({ type: 'node', id: el.id, lat: el.lat, lon: el.lon });
       else if (el.type === 'way') slim.push({ type: 'way', id: el.id, nodes: el.nodes, tags: { name: el.tags?.name, highway: el.tags?.highway } });
     }
+    clearInterval(ticker);
     if (!slim.some((el) => el.type === 'way')) { toast('No walkable streets found here.', 4000); return; }
-    const area = { name: placeName(osm) || `Area ${areas.length + 1}`, bbox, osm: slim, createdAt: Date.now() };
+    toast('Naming the area…', 10000);
+    const name = await fetchOverpass(placeQuery(center), { timeoutMs: 8000, servers: 1 }).then(placeName).catch(() => '');
+    const area = { name: name || `Area ${areas.length + 1}`, bbox, osm: slim, createdAt: Date.now() };
     area.id = await db.put('areas', area);
     const before = engine.blocks.size;
     areas.push(area);
     rebuild();
     toast(`Added ${area.name} · ${(engine.blocks.size - before).toLocaleString()} blocks`, 3500);
   } catch (err) {
-    console.error(err);
-    toast('Could not download streets. Check your connection and try again.', 5000);
+    console.error('Street download failed:', err.message);
+    toast(navigator.onLine === false
+      ? 'You’re offline. Connect to the internet to download streets.'
+      : 'The free street servers are busy or slow right now. Try again in a minute, or zoom in to a smaller area.', 7000);
   } finally {
+    clearInterval(ticker);
+    addingArea = false;
     buttons.forEach((btn) => { btn.disabled = false; btn.textContent = btn.dataset.label; });
   }
 }
+let addingArea = false;
 
-async function fetchOverpass(query) {
-  let lastErr;
-  for (const url of OVERPASS) {
+// Tries each street server with a time limit. Overpass reports some failures
+// (like a query timing out) as a normal answer with a "remark", so check that too.
+async function fetchOverpass(query, { timeoutMs = OVERPASS_TIMEOUT_MS, servers = OVERPASS.length, onServer } = {}) {
+  const problems = [];
+  for (const [i, url] of OVERPASS.slice(0, servers).entries()) {
+    onServer?.(i + 1);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }) });
-      if (!res.ok) throw new Error(`Overpass ${res.status}`);
-      return await res.json();
+      const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }), signal: ctrl.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json.remark && /error|timed out|out of memory/i.test(json.remark)) throw new Error(json.remark);
+      return json;
     } catch (err) {
-      lastErr = err;
+      problems.push(`${new URL(url).host}: ${err.name === 'AbortError' ? `no answer in ${timeoutMs / 1000} s` : err.message}`);
+    } finally {
+      clearTimeout(timer);
     }
   }
-  throw lastErr;
+  throw new Error(problems.join(' | '));
 }
 
 // ---------------------------------------------------------------- recording
@@ -611,6 +643,11 @@ async function keepAwake() {
 }
 function releaseWake() { wakeLock?.release().catch(() => {}); wakeLock = null; }
 
+// Coming back to the app after a while: re-center on where you are now.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !rec && view && Date.now() - lastCentered > 5 * 60000) centerOnMe({ quiet: true });
+});
+
 document.addEventListener('visibilitychange', () => {
   if (!rec) return;
   if (document.visibilityState === 'hidden') saveRec();
@@ -690,6 +727,24 @@ navigator.getBattery?.().then((b) => {
 // ---------------------------------------------------------------- location
 function showMe(p) {
   view.showMe(p);
+}
+
+// Quietly move the map to where you are (used when the app opens). Asks for
+// location permission the first time.
+let lastCentered = 0;
+function centerOnMe({ quiet = false } = {}) {
+  if (!('geolocation' in navigator) || rec) return;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      if (rec) return;
+      lastCentered = Date.now();
+      const p = [pos.coords.latitude, pos.coords.longitude];
+      showMe(p);
+      view.flyTo(p, Math.max(view.getZoom(), 16));
+    },
+    () => { if (!quiet) toast('Could not get your location.'); },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 },
+  );
 }
 
 function locateOnce() {

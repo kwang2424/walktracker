@@ -90,6 +90,12 @@ export function overpassQuery([south, west, north, east], center) {
   return q;
 }
 
+// Just the neighborhood lookup, sent separately so a slow lookup never holds up the streets.
+export function placeQuery(center) {
+  return `[out:json][timeout:15];is_in(${center[0]},${center[1]})->.a;` +
+    `area.a["name"]["place"~"^(neighbourhood|quarter|suburb|borough|city_district|town|village|city)$"];out tags;`;
+}
+
 const PLACE_RANK = ['neighbourhood', 'quarter', 'suburb', 'city_district', 'borough', 'village', 'town', 'city'];
 
 // The most local place name in an Overpass response, or '' if none.

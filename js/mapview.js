@@ -76,8 +76,10 @@ export class MapView {
     this.map.on('mouseleave', 'blocks-hit', () => { this.map.getCanvas().style.cursor = ''; });
   }
 
+  // Mapbox Standard (and styles built on it) offer "slots" for custom layers.
   _isStandard() {
-    return (this.map.getStyle().imports || []).some((i) => i.id === 'basemap');
+    const style = this.map.getStyle() || {};
+    return (style.imports || []).length > 0 || (style.layers || []).some((l) => l.type === 'slot');
   }
 
   // Our lines sit above roads but under street names, so names stay readable.
@@ -147,8 +149,9 @@ export class MapView {
     const next = { ...this.look, ...look };
     if (next.theme === this.look.theme && next.dark === this.look.dark) return;
     this.look = next;
-    if (!this.map.isStyleLoaded() || !this._isStandard()) return;
-    for (const [k, v] of Object.entries(basemapConfig(next))) this.map.setConfigProperty('basemap', k, v);
+    for (const [k, v] of Object.entries(basemapConfig(next))) {
+      try { this.map.setConfigProperty('basemap', k, v); } catch (err) { console.warn('Map look not applied', k, err); }
+    }
   }
 
   setColors(colors) {
@@ -265,6 +268,10 @@ export class MapView {
       padding: { top: Math.min(140, h / 4), bottom: Math.min(120, h / 4), left: pad, right: pad },
       maxZoom, animate, duration: 600,
     });
+  }
+
+  flyTo(p, zoom) {
+    this.map.easeTo({ center: ll(p), zoom, duration: 800 });
   }
 
   setView(p, zoom) {

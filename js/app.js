@@ -24,7 +24,7 @@ const $ = (sel) => document.querySelector(sel);
 
 // ---------------------------------------------------------------- settings
 const SETTINGS_KEY = 'walktracker.settings';
-const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true };
+const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true, hudScope: 'hood' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch { /* private mode */ }
 if (settings.detailedMap) settings.mapTheme = 'default'; // older setting
 delete settings.detailedMap;
@@ -252,12 +252,7 @@ function renderStats() {
   if (asleep()) { statsDirty = true; return; }
   statsDirty = false;
   const s = (lastSummary = city.summary(overrides));
-  const pct = s.length ? (100 * s.walkedLength) / s.length : 0;
-  $('#ring-fill').style.strokeDashoffset = RING * (1 - pct / 100);
-  $('#stat-pct').textContent = fmtPct(pct);
-  $('#stat-blocks').textContent = s.walked.toLocaleString();
-  $('#stat-total').textContent = s.blocks.toLocaleString();
-  $('#stat-dist').textContent = `${km(s.walkedLength)} of ${km(s.length)} of NYC walked`;
+  renderHud();
 
   const all = rec ? [...tracks, { startedAt: rec.track.startedAt, distance: rec.dist, points: [] }] : tracks;
   const week = weekStats(all, city.completedAt);
@@ -268,7 +263,6 @@ function renderStats() {
 
   // Shade each neighborhood on the map by how much of it you've walked.
   s.hoods.forEach((h, i) => view.setHoodProgress(i, h.length ? h.walkedLength / h.length : 0));
-  renderHoodChip();
   $('#hud').hidden = !!rec;
   if ($('#sheet').open) renderSheet();
 }
@@ -379,7 +373,7 @@ function dismissInstallTip() {
 // Zoomed in far enough, load the blocks of the neighborhoods on screen.
 const onMapMoved = throttle(() => {
   if (!city.index) return;
-  renderHoodChip();
+  renderHud();
   if (view.getZoom() < BLOCKS_MIN_ZOOM - 0.5) return;
   const ids = city.hoodsIn(view.getBBox()).filter((id) => !city.loaded.has(id));
   if (ids.length && ids.length <= MAX_VISIBLE_HOODS) city.ensure(ids).catch(() => {});
@@ -397,19 +391,48 @@ function hoodAtCenter() {
   return null;
 }
 
-function hoodPct(id) {
-  const h = lastSummary?.hoods.find((x) => x.id === id);
-  return h && h.length ? (100 * h.walkedLength) / h.length : 0;
+// What the progress card shows: the neighborhood (or its borough) in the middle
+// of the map, or all of NYC. Zoomed far out, or outside NYC, it shows NYC.
+function hudTarget() {
+  const s = lastSummary;
+  const h = settings.hudScope !== 'city' && view.getZoom() >= 11 ? hoodAtCenter() : null;
+  if (h && settings.hudScope === 'hood') {
+    return { kind: 'hood', id: h.id, name: h.name, ...s.hoods.find((x) => x.id === h.id) };
+  }
+  if (h) {
+    const b = s.boroughs.find((x) => x.name === h.borough);
+    return { kind: 'borough', ...b, name: b.name };
+  }
+  return { kind: 'city', name: 'New York City', blocks: s.blocks, length: s.length, walked: s.walked, walkedLength: s.walkedLength };
 }
 
-function renderHoodChip() {
-  const chip = $('#chip-hood');
-  const h = view.getZoom() >= 12 ? hoodAtCenter() : null;
-  chip.hidden = !h;
-  if (!h) return;
-  chip.dataset.id = h.id;
-  $('#chip-hood-name').textContent = h.name;
-  $('#chip-hood-pct').textContent = fmtPct(hoodPct(h.id));
+let hudShown = null;
+function renderHud() {
+  if (!lastSummary) return;
+  const t = (hudShown = hudTarget());
+  const pct = t.length ? (100 * t.walkedLength) / t.length : 0;
+  $('#ring-fill').style.strokeDashoffset = RING * (1 - pct / 100);
+  $('#stat-pct').textContent = fmtPct(pct);
+  $('#hud-place-name').textContent = t.name;
+  $('#stat-blocks').textContent = t.walked.toLocaleString();
+  $('#stat-total').textContent = t.blocks.toLocaleString();
+  $('#stat-dist').textContent = `${km(t.walkedLength)} of ${km(t.length)} walked`;
+  document.querySelectorAll('#hud-scope button').forEach((b) => b.setAttribute('aria-checked', b.dataset.scope === settings.hudScope));
+}
+
+function setHudScope(scope) {
+  settings.hudScope = scope;
+  saveSettings();
+  renderHud();
+}
+
+// Tapping the place name zooms the map to it.
+function showHudPlace() {
+  const t = hudShown;
+  if (!t) return;
+  if (t.kind === 'hood') return openHood(t.id);
+  const hoods = city.index.hoods.filter((h) => t.kind === 'city' || h.borough === t.name);
+  view.fitPoints(hoods.flatMap(({ bbox: [s, w, n, e] }) => [[s, w], [n, e]]), { maxZoom: 14 });
 }
 
 let hoodLitTimer;
@@ -1237,7 +1260,8 @@ $('#btn-resume-finish').addEventListener('click', finishResumable);
 $('#btn-install-ok').addEventListener('click', dismissInstallTip);
 $('#opt-autotrack').addEventListener('change', (e) => native?.call('setAutoTrack', { on: e.target.checked }).then(renderNativeStatus));
 $('#btn-native-settings').addEventListener('click', () => native?.call('openSettings'));
-$('#chip-hood').addEventListener('click', () => openHood($('#chip-hood').dataset.id));
+$('#hud-place').addEventListener('click', showHudPlace);
+document.querySelectorAll('#hud-scope button').forEach((b) => b.addEventListener('click', () => setHudScope(b.dataset.scope)));
 $('#btn-export-backup').addEventListener('click', exportBackup);
 $('#btn-export-gpx').addEventListener('click', exportGpx);
 $('#btn-import').addEventListener('click', () => $('#file-input').click());

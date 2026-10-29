@@ -32,13 +32,21 @@
       <span id="stat-pct">0%</span>
     </div>
     <div class="hud-main">
+      <!-- The place the numbers are for; tap to zoom the map to it -->
+      <button class="hud-place" id="hud-place"><span id="hud-place-name">New York City</span></button>
       <div class="hud-title"><b id="stat-blocks">0</b> <span class="muted">of</span> <span id="stat-total">0</span> <span class="muted">blocks</span></div>
       <div class="hud-sub muted" id="stat-dist">0 of 0 km walked</div>
+    </div>
+    <div class="hud-foot">
+      <div class="scope" id="hud-scope" role="radiogroup" aria-label="Show progress for">
+        <button data-scope="hood" role="radio" aria-checked="true">Neighborhood</button>
+        <button data-scope="borough" role="radio" aria-checked="false">Borough</button>
+        <button data-scope="city" role="radio" aria-checked="false">NYC</button>
+      </div>
       <div class="chips">
         <span class="chip" id="chip-week">This week · 0 km</span>
         <span class="chip chip-hot" id="chip-streak" hidden></span>
       </div>
-      <button class="hood-chip" id="chip-hood" hidden><span id="chip-hood-name"></span><b id="chip-hood-pct"></b></button>
     </div>
   </header>
 

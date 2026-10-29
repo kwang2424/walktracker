@@ -76,8 +76,18 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 
 #hud {
   top: calc(10px + var(--safe-top));
-  display: flex; gap: 14px; align-items: center; padding: 12px 16px 12px 12px;
+  display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; padding: 12px 14px 12px 12px;
 }
+.hud-place {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  max-width: 100%; padding: 0; font-size: 15px; font-weight: 700; line-height: 1.25; text-align: left; color: var(--fg);
+}
+.hud-place span::after { content: " ›"; color: var(--muted); font-weight: 600; }
+.hud-foot { flex-basis: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.hud-foot .chips { margin-top: 0; }
+.scope { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--surface); }
+.scope button { padding: 4px 9px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.scope button[aria-checked="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
 .ring { position: relative; width: 64px; height: 64px; flex: none; }
 .ring svg { width: 64px; height: 64px; transform: rotate(-90deg); }
 .ring circle { stroke-width: 7; fill: none; }
@@ -122,15 +132,6 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .notice-actions { display: flex; gap: 8px; }
 .notice-actions .btn { flex: 1; height: 44px; }
 
-/* "You're in" neighborhood chip under the stats */
-.hood-chip {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
-  margin-top: 8px; padding: 6px 10px; border-radius: 10px; background: var(--surface);
-  font-size: 13px; font-weight: 600; text-align: left;
-}
-.hood-chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hood-chip span::before { content: "📍 "; }
-.hood-chip b { color: var(--accent); flex: none; }
 .list li.group-head { border-bottom: none; padding: 16px 2px 4px; }
 .list li.group-head .title { font-size: 15px; }
 .list li.group-head + li { border-top: 1px solid var(--line); }

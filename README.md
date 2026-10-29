@@ -10,9 +10,9 @@ No account, no server, and no tracking. It's a small web app you host yourself f
 - **All of NYC**: every block in the five boroughs (about 102,000 blocks, 10,000 km of streets) counts toward
   your progress, with no setup.
 - **Official neighborhoods**: progress for each of NYC's 2020 Neighborhood Tabulation Areas, grouped by borough.
-  Zoomed out, neighborhoods are shaded by how much you've walked; tap one to zoom in. A chip shows the
-  neighborhood you're looking at and its %.
-- **Progress**: NYC-wide ring, blocks and km walked, this week's distance and new blocks, and your daily streak.
+  Zoomed out, neighborhoods are shaded by how much you've walked; tap one to zoom in.
+- **Progress card**: shows the neighborhood in the middle of the map (its %, blocks and km walked), with a switch to
+  widen it to the borough or all of NYC. Tap the name to zoom to it. Plus this week's distance, new blocks and your streak.
 - **Per-street progress** for every street in each borough, with filters: in progress, not started, done.
 - **Import past walks** from GPX files (Strava, Garmin, Google Takeout, Apple Health via an export app, etc.).
 - **Fix mistakes**: tap any block to mark it walked or not walked by hand.

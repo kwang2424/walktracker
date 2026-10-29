@@ -123,7 +123,7 @@
       <p class="muted">WalkTracker draws its map with Mapbox. A free Mapbox account covers personal use.</p>
       <ol>
         <li>Sign up or log in at <a href="https://account.mapbox.com/" target="_blank" rel="noopener">account.mapbox.com</a>.</li>
-        <li>Open <b>Tokens</b> and tap <b>Create a token</b>. Under <b>URL restrictions</b>, add <code id="setup-url"></code></li>
+        <li id="setup-step-url">Open <b>Tokens</b> and tap <b>Create a token</b>. Under <b>URL restrictions</b>, add <code id="setup-url"></code></li>
         <li>Copy the token (it starts with <code>pk.</code>) and paste it below.</li>
       </ol>
       <input id="setup-token" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="pk.eyJ1Ijoi…">
@@ -172,12 +172,25 @@
 
 
     <section data-panel="settings" hidden>
+      <!-- Only in the iPhone app -->
+      <div id="native-settings" hidden>
+        <h3>Automatic walks</h3>
+        <div class="group">
+          <label class="setting"><span><b>Record walks automatically</b><small>Notices when you start walking and records the walk, even when the app is closed or the phone is locked.</small></span>
+            <input type="checkbox" class="switch" id="opt-autotrack"></label>
+          <button class="setting-btn" id="btn-native-settings" hidden>Open iPhone Settings</button>
+        </div>
+        <p class="muted small" id="native-status"></p>
+      </div>
+
+      <div id="battery-settings">
       <h3>Battery</h3>
       <div class="group">
         <label class="setting"><span><b>Battery saver screen</b><small>While walking, the screen goes black 30 s after your last tap. Tracking keeps going.</small></span>
           <input type="checkbox" class="switch" data-setting="autoDark"></label>
         <label class="setting"><span><b>Smart GPS</b><small>Turns GPS off when you stop for a while (red light, coffee) and back on when you move.</small></span>
           <input type="checkbox" class="switch" data-setting="smartGps"></label>
+      </div>
       </div>
 
       <h3>Map</h3>

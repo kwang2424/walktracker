@@ -1,0 +1,32 @@
+name: iPhone app
+
+# Builds the iPhone app on one of GitHub's Macs (unsigned, for the simulator),
+# so mistakes show up here instead of on the Mac used to install it.
+on:
+  push:
+    branches: [main]
+    paths: ['ios/**', 'js/**', 'css/**', 'icons/**', 'index.html', '.github/workflows/ios.yml']
+  pull_request:
+    paths: ['ios/**', 'js/**', 'css/**', 'icons/**', 'index.html', '.github/workflows/ios.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild -version
+          xcodebuild -project ios/WalkTracker.xcodeproj -target WalkTracker -configuration Debug \
+            -sdk iphonesimulator SYMROOT="$PWD/ios-build" CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -60
+      - name: Check the web app is built in
+        run: |
+          APP=ios-build/Debug-iphonesimulator/WalkTracker.app
+          ls "$APP"
+          test -f "$APP/web/index.html" && test -f "$APP/web/js/app.js" && test -f "$APP/web/js/native.js"
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP/Info.plist"

@@ -7,6 +7,7 @@ import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, CITY_BASE, overrideWalked } from './city.js';
 import { KeepAwake, isIOS } from './awake.js';
+import { native, nativeWalkToTrack } from './native.js';
 
 const MAX_VISIBLE_HOODS = 30; // load blocks for at most this many neighborhoods on screen
 const RESUME_WITHIN_MS = 3 * 3600000; // offer to continue a walk the phone closed within this time
@@ -90,7 +91,12 @@ function showSetup(message = '') {
   $('#setup').hidden = false;
   $('#setup-error').hidden = !message;
   $('#setup-error').textContent = message;
-  $('#setup-url').textContent = location.origin + location.pathname.replace(/index\.html$/, '');
+  if (native) {
+    // The app has no web address to restrict a token to.
+    $('#setup-step-url').textContent = 'Open Tokens and tap Create a token. Leave URL restrictions empty: the iPhone app has no web address to restrict it to.';
+  } else {
+    $('#setup-url').textContent = location.origin + location.pathname.replace(/index\.html$/, '');
+  }
   $('#setup-token').value = token || '';
   $('#setup-cancel').hidden = !token || !!message;
 }
@@ -310,6 +316,7 @@ async function load() {
     return;
   }
   view.setHoods(outlines);
+  await importNativeWalks();
   await rebuild();
   if (resumable) showResumeCard(resumable);
   else centerOnMe({ quiet: true });
@@ -356,7 +363,7 @@ const isStandalone = () => navigator.standalone === true || matchMedia('(display
 // In a Safari tab, iPhone erases a site's data after 7 days without a visit.
 // Home Screen apps are exempt, so nudge people there (every few days at most).
 function maybeShowInstallTip() {
-  if (!isIOS() || isStandalone()) return;
+  if (native || !isIOS() || isStandalone()) return; // the iPhone app keeps its data
   let last = 0;
   try { last = Number(localStorage.getItem('walktracker.installTip')) || 0; } catch { /* ignore */ }
   if (Date.now() - last < INSTALL_TIP_EVERY_MS) return;
@@ -439,8 +446,8 @@ function askMotionPermission() {
 async function startWalk(resume = null) {
   if (!('geolocation' in navigator)) return toast('This browser has no GPS access.');
   // These must run straight from the tap: the keep-awake video and iPhone's motion prompt.
-  awake.start();
-  if (settings.smartGps) askMotionPermission();
+  if (!native) awake.start(); // the iPhone app records with the screen off
+  if (settings.smartGps && !native) askMotionPermission();
   if (!resume && resumable) await finishResumable(); // starting fresh: save the old one
   const track = resume || { name: '', startedAt: Date.now(), points: [], inProgress: true, source: 'recorded' };
   rec = {
@@ -508,7 +515,8 @@ function onPosition(pos) {
     return;
   }
   setGps('good', `GPS ±${Math.round(accuracy)} m`);
-  if (settings.smartGps && rec.still.update(p, accuracy) === 'still') {
+  // (The iPhone app manages GPS power itself, and must keep recording in the background.)
+  if (settings.smartGps && !native && rec.still.update(p, accuracy) === 'still') {
     pause();
     return;
   }
@@ -718,6 +726,8 @@ document.addEventListener('visibilitychange', () => {
   }
   const away = rec.hiddenAt ? Date.now() - rec.hiddenAt : 0;
   rec.hiddenAt = 0;
+  // The iPhone app kept recording in the background and hands the points over itself.
+  if (native) { wakeUpUi(); return; }
   if (!rec.paused) startGps('high'); // the old GPS watch often doesn't survive
   wakeUpUi();
   if (away > 30000) {
@@ -730,13 +740,13 @@ document.addEventListener('visibilitychange', () => {
 let darkTimer = null;
 function armAutoDark() {
   clearTimeout(darkTimer);
-  if (!rec || !settings.autoDark || pocketOn) return;
+  if (!rec || !settings.autoDark || pocketOn || native) return; // in the iPhone app, just lock the phone
   darkTimer = setTimeout(enterPocket, lowBattery ? AUTO_DARK_LOW_BATTERY_MS : AUTO_DARK_MS);
 }
 document.addEventListener('pointerdown', () => {
   if (!rec) return;
   if (!pocketOn) armAutoDark();
-  if (awake.method === 'none') awake.start(); // a tap lets the keep-awake video start if it was blocked
+  if (!native && awake.method === 'none') awake.start(); // a tap lets the keep-awake video start if it was blocked
 }, { capture: true });
 
 function enterPocket() {
@@ -1105,8 +1115,53 @@ function renderHoods() {
 
 function renderSettings() {
   document.querySelectorAll('[data-setting]').forEach((el) => { el.checked = !!settings[el.dataset.setting]; });
+  $('#native-settings').hidden = !native;
+  $('#battery-settings').hidden = !!native;
+  if (native) native.call('status').then(renderNativeStatus).catch(() => {});
   document.querySelectorAll('#map-theme button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.theme === settings.mapTheme));
   renderStorageInfo();
+}
+
+// ---------------------------------------------------------------- iPhone app
+// Walks the phone recorded by itself (app closed or in the background).
+async function importNativeWalks() {
+  if (!native) return 0;
+  let walks;
+  try { walks = await native.call('takeWalks'); } catch { return 0; }
+  const have = new Set(tracks.map((t) => t.nativeId).filter(Boolean));
+  let added = 0;
+  for (const w of walks || []) {
+    if (have.has(w.id) || w.points.length < 2) continue;
+    const t = nativeWalkToTrack(w);
+    t.id = await db.put('tracks', t);
+    tracks.push(t);
+    added++;
+  }
+  // Only now that they're saved here can the phone forget them.
+  if (walks?.length) await native.call('ackWalks', { ids: walks.map((w) => w.id) }).catch(() => {});
+  return added;
+}
+
+window.addEventListener('native-walks', async () => {
+  if (!city.index) return;
+  const added = await importNativeWalks();
+  if (!added) return;
+  await rebuild();
+  toast(`Added ${added} walk${added === 1 ? '' : 's'} recorded automatically`, 4000);
+});
+
+function renderNativeStatus(st) {
+  if (!st) return;
+  $('#opt-autotrack').checked = !!st.autoTrack;
+  const problems = [];
+  if (st.autoTrack && st.location !== 'always') problems.push('set Location to “Always”');
+  if (st.autoTrack && st.motion === 'denied') problems.push('turn on Motion & Fitness');
+  $('#btn-native-settings').hidden = !problems.length;
+  $('#native-status').textContent = !st.autoTrack
+    ? 'Off: walks are only recorded when you tap Start walk (they keep recording with the phone locked).'
+    : problems.length
+      ? `Almost there: in iPhone Settings › WalkTracker, ${problems.join(' and ')}.`
+      : st.recording ? 'On. Recording a walk right now.' : 'On. Walks are recorded automatically.';
 }
 
 function onSettingChange(key, value) {
@@ -1180,6 +1235,8 @@ $('#hood-search').addEventListener('input', renderHoods);
 $('#btn-resume').addEventListener('click', () => resumable && startWalk(resumable));
 $('#btn-resume-finish').addEventListener('click', finishResumable);
 $('#btn-install-ok').addEventListener('click', dismissInstallTip);
+$('#opt-autotrack').addEventListener('change', (e) => native?.call('setAutoTrack', { on: e.target.checked }).then(renderNativeStatus));
+$('#btn-native-settings').addEventListener('click', () => native?.call('openSettings'));
 $('#chip-hood').addEventListener('click', () => openHood($('#chip-hood').dataset.id));
 $('#btn-export-backup').addEventListener('click', exportBackup);
 $('#btn-export-gpx').addEventListener('click', exportGpx);
@@ -1204,4 +1261,4 @@ else if (!token) showSetup();
 else toast('The map couldn’t load. Check your connection and reopen the app.', 60000);
 
 // Handy for debugging from the browser console.
-window.walktracker = { city, db, rebuild, settings, view, awake, get rec() { return rec; } };
+window.walktracker = { city, db, rebuild, settings, view, awake, native, get rec() { return rec; } };

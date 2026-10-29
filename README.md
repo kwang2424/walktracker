@@ -21,6 +21,12 @@ No account, no server, and no tracking. It's a small web app you host yourself f
   colors in dark mode. 3D buildings are off to save battery and keep the blocks visible.
 - Works offline once loaded (the map itself still needs a connection).
 
+## iPhone app
+
+There's also a real iPhone app in [`ios/`](ios/README.md): the same app, but it keeps recording with the phone
+locked and can record walks automatically when you start walking. It uses only Apple's frameworks and installs
+from a Mac with a free Apple ID (reinstall every 7 days). See [ios/README.md](ios/README.md).
+
 ## Battery
 
 Recording a walk uses GPS and keeps the screen on, which are the two biggest battery costs. The app cuts both:
@@ -123,6 +129,7 @@ node scripts/build_city.mjs streets.json data/nyc
 | `js/gpx.js` | GPX import/export |
 | `js/power.js` | Stillness and motion detection for smart GPS |
 | `js/awake.js` | Keeps the screen on during walks |
+| `js/native.js` | Extra features when running inside the iPhone app |
 | `js/stats.js` | Weekly stats, streaks, when each block was finished |
 | `js/db.js` | On-device storage (IndexedDB), backup export/import |
 | `js/city.js` | Loads NYC neighborhoods on demand and tracks progress in each |

@@ -6,8 +6,11 @@ import { streak, weekStats } from './stats.js';
 import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, CITY_BASE, overrideWalked } from './city.js';
+import { KeepAwake, isIOS } from './awake.js';
 
 const MAX_VISIBLE_HOODS = 30; // load blocks for at most this many neighborhoods on screen
+const RESUME_WITHIN_MS = 3 * 3600000; // offer to continue a walk the phone closed within this time
+const INSTALL_TIP_EVERY_MS = 3 * 86400000;
 const MIN_ACCURACY_M = 35; // ignore GPS fixes worse than this
 const MIN_STEP_M = 4; // ignore jitter while standing still
 const SAVE_EVERY_MS = 20000;
@@ -284,13 +287,17 @@ async function rebuild() {
 
 async function load() {
   await reloadData();
-  // A walk still marked in-progress means the app was closed mid-walk. Keep what was saved.
-  for (const t of tracks) {
-    if (t.inProgress) {
-      t.inProgress = false;
-      t.name ||= 'Recovered walk';
-      t.distance = polylineLength(t.points);
-      await db.put('tracks', t);
+  // A walk still marked in-progress means the phone closed the app mid-walk.
+  // Offer to continue the most recent one; save any older ones as finished.
+  const unfinished = tracks.filter((t) => t.inProgress).sort((a, b) => b.startedAt - a.startedAt);
+  for (const t of unfinished) {
+    if (!t.points.length) {
+      await db.delete('tracks', t.id);
+      tracks = tracks.filter((x) => x !== t);
+    } else if (!resumable && Date.now() - lastTimeOf(t) < RESUME_WITHIN_MS) {
+      resumable = t;
+    } else {
+      await finishTrack(t);
     }
   }
   view.setView([40.7306, -73.9866], 14);
@@ -304,7 +311,61 @@ async function load() {
   }
   view.setHoods(outlines);
   await rebuild();
-  centerOnMe({ quiet: true });
+  if (resumable) showResumeCard(resumable);
+  else centerOnMe({ quiet: true });
+  maybeShowInstallTip();
+}
+
+// ---------------------------------------------------------------- unfinished walks + install tip
+let resumable = null;
+const lastTimeOf = (t) => t.endedAt || t.points[t.points.length - 1]?.[2] || t.startedAt;
+const walkName = (t) => `Walk on ${new Date(t.startedAt).toLocaleDateString([], { weekday: 'long' })}`;
+
+async function finishTrack(t) {
+  Object.assign(t, {
+    inProgress: false,
+    endedAt: lastTimeOf(t),
+    distance: polylineLength(t.points),
+    duration: t.duration ?? lastTimeOf(t) - t.startedAt - (t.pausedMs || 0),
+    name: t.name || walkName(t),
+  });
+  await db.put('tracks', t);
+}
+
+function showResumeCard(t) {
+  const mins = Math.round((Date.now() - lastTimeOf(t)) / 60000);
+  $('#resume-info').textContent = `Started ${new Date(t.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ` +
+    `${km(polylineLength(t.points))} so far · stopped ${mins < 1 ? 'just now' : `${mins} min ago`}`;
+  $('#resume').hidden = false;
+  const last = t.points[t.points.length - 1];
+  if (last) view.setView([last[0], last[1]], 16);
+}
+
+async function finishResumable() {
+  if (!resumable) return;
+  const t = resumable;
+  resumable = null;
+  $('#resume').hidden = true;
+  await finishTrack(t);
+  renderStats();
+  toast(`Walk saved · ${km(t.distance)}`, 3000);
+}
+
+const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+
+// In a Safari tab, iPhone erases a site's data after 7 days without a visit.
+// Home Screen apps are exempt, so nudge people there (every few days at most).
+function maybeShowInstallTip() {
+  if (!isIOS() || isStandalone()) return;
+  let last = 0;
+  try { last = Number(localStorage.getItem('walktracker.installTip')) || 0; } catch { /* ignore */ }
+  if (Date.now() - last < INSTALL_TIP_EVERY_MS) return;
+  $('#install').hidden = false;
+}
+
+function dismissInstallTip() {
+  $('#install').hidden = true;
+  try { localStorage.setItem('walktracker.installTip', String(Date.now())); } catch { /* ignore */ }
 }
 
 // ---------------------------------------------------------------- neighborhoods
@@ -375,17 +436,34 @@ function askMotionPermission() {
   DeviceMotionEvent.requestPermission().then((r) => { motionAllowed = r === 'granted'; }).catch(() => {});
 }
 
-async function startWalk() {
+async function startWalk(resume = null) {
   if (!('geolocation' in navigator)) return toast('This browser has no GPS access.');
-  if (settings.smartGps) askMotionPermission(); // must run straight from the tap
-  const track = { name: '', startedAt: Date.now(), points: [], inProgress: true, source: 'recorded' };
+  // These must run straight from the tap: the keep-awake video and iPhone's motion prompt.
+  awake.start();
+  if (settings.smartGps) askMotionPermission();
+  if (!resume && resumable) await finishResumable(); // starting fresh: save the old one
+  const track = resume || { name: '', startedAt: Date.now(), points: [], inProgress: true, source: 'recorded' };
   rec = {
-    track, points: track.points, dist: 0, newBlocks: new Set(), lastSave: Date.now(),
-    still: new StillnessDetector(), paused: false, pausedAt: 0, pausedMs: 0, watchId: null,
+    track, points: track.points, dist: resume ? polylineLength(track.points) : 0, newBlocks: new Set(), lastSave: Date.now(),
+    still: new StillnessDetector(), paused: false, pausedAt: 0, watchId: null,
+    // Time the app was closed doesn't count toward your pace.
+    pausedMs: resume ? (track.pausedMs || 0) + (Date.now() - lastTimeOf(track)) : 0,
   };
-  track.id = await db.put('tracks', track);
-  city.startLive(rec.points);
-  view.setLive([]);
+  if (resume) {
+    // It was counted as a saved walk at startup; make it the live walk again.
+    resumable = null;
+    $('#resume').hidden = true;
+    tracks = tracks.filter((t) => t !== resume);
+    city.startLive(rec.points);
+    city.setTracks(tracks);
+    drawTracks();
+    drawBlocks();
+    view.setLive(rec.points);
+  } else {
+    track.id = await db.put('tracks', track);
+    city.startLive(rec.points);
+    view.setLive([]);
+  }
   startGps('high');
   rec.timer = setInterval(tick, 1000);
   document.body.classList.add('recording');
@@ -396,9 +474,9 @@ async function startWalk() {
   setGps('wait', 'Finding GPS…');
   renderStats();
   tick();
-  await keepAwake();
   armAutoDark();
-  if (lowBattery) toast('Battery is low: the saver screen will turn on after 10 s.', 4000);
+  if (resume) toast('Continuing your walk', 3000);
+  else if (lowBattery) toast('Battery is low: the saver screen will turn on after 10 s.', 4000);
 }
 
 function startGps(mode) {
@@ -543,6 +621,7 @@ function saveRec() {
   rec.lastSave = Date.now();
   rec.track.endedAt = Date.now();
   rec.track.distance = rec.dist;
+  rec.track.pausedMs = rec.pausedMs;
   return db.put('tracks', rec.track);
 }
 
@@ -555,7 +634,7 @@ async function stopWalk() {
   clearTimeout(darkTimer);
   rec = null;
   city.stopLive();
-  releaseWake();
+  awake.stop();
   exitPocket();
   view.setLive([]);
   document.body.classList.remove('recording');
@@ -577,14 +656,16 @@ async function stopWalk() {
     endedAt: Date.now(),
     distance: r.dist,
     duration: Date.now() - r.track.startedAt - r.pausedMs,
-    name: `Walk on ${new Date(r.track.startedAt).toLocaleDateString([], { weekday: 'long' })}`,
+    name: r.track.name || walkName(r.track),
   });
   await db.put('tracks', r.track);
   tracks.push(r.track);
   city.setTracks(tracks); // replays loaded neighborhoods with the saved walk
   drawTracks();
   renderStats();
-  toast(`Walk saved · ${km(r.dist)} · ${r.newBlocks.size} new block${r.newBlocks.size === 1 ? '' : 's'}`, 4000);
+  // Counted from the whole saved walk, so a continued walk includes its first part too.
+  const n = city.newByTrack.get(r.track.id) ?? r.newBlocks.size;
+  toast(`Walk saved · ${km(r.dist)} · ${n} new block${n === 1 ? '' : 's'}`, 4000);
 }
 
 const clock = (ms) => {
@@ -618,22 +699,32 @@ function setStatus(text) {
 }
 
 // ---------------------------------------------------------------- screen + battery saver
-let wakeLock = null;
-async function keepAwake() {
-  // Browsers stop GPS when the screen locks, so keep it on during a walk.
-  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* unsupported */ }
-}
-function releaseWake() { wakeLock?.release().catch(() => {}); wakeLock = null; }
+// Browsers stop GPS when the screen locks, so keep it on during a walk.
+const awake = new KeepAwake();
 
 // Coming back to the app after a while: re-center on where you are now.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && !rec && view && Date.now() - lastCentered > 5 * 60000) centerOnMe({ quiet: true });
 });
 
+// Mid-walk, the app was hidden (screen locked, another app): phones pause web
+// apps then, so GPS stops. Coming back, restart GPS and say what was missed.
 document.addEventListener('visibilitychange', () => {
   if (!rec) return;
-  if (document.visibilityState === 'hidden') saveRec();
-  else { keepAwake(); wakeUpUi(); }
+  if (document.visibilityState === 'hidden') {
+    rec.hiddenAt = Date.now();
+    saveRec();
+    return;
+  }
+  const away = rec.hiddenAt ? Date.now() - rec.hiddenAt : 0;
+  rec.hiddenAt = 0;
+  if (!rec.paused) startGps('high'); // the old GPS watch often doesn't survive
+  wakeUpUi();
+  if (away > 30000) {
+    const mins = Math.round(away / 60000);
+    toast(`Tracking stopped for ${mins < 1 ? 'under a minute' : `${mins} min`} while WalkTracker was closed or the screen was locked. ` +
+      'Keep it open while you walk; the black battery saver screen is fine.', 8000);
+  }
 });
 
 let darkTimer = null;
@@ -642,7 +733,11 @@ function armAutoDark() {
   if (!rec || !settings.autoDark || pocketOn) return;
   darkTimer = setTimeout(enterPocket, lowBattery ? AUTO_DARK_LOW_BATTERY_MS : AUTO_DARK_MS);
 }
-document.addEventListener('pointerdown', () => { if (rec && !pocketOn) armAutoDark(); }, { capture: true });
+document.addEventListener('pointerdown', () => {
+  if (!rec) return;
+  if (!pocketOn) armAutoDark();
+  if (awake.method === 'none') awake.start(); // a tap lets the keep-awake video start if it was blocked
+}, { capture: true });
 
 function enterPocket() {
   if (!rec || pocketOn) return;
@@ -1082,6 +1177,9 @@ document.querySelectorAll('#street-filters button').forEach((b) => b.addEventLis
 }));
 $('#street-search').addEventListener('input', renderStreets);
 $('#hood-search').addEventListener('input', renderHoods);
+$('#btn-resume').addEventListener('click', () => resumable && startWalk(resumable));
+$('#btn-resume-finish').addEventListener('click', finishResumable);
+$('#btn-install-ok').addEventListener('click', dismissInstallTip);
 $('#chip-hood').addEventListener('click', () => openHood($('#chip-hood').dataset.id));
 $('#btn-export-backup').addEventListener('click', exportBackup);
 $('#btn-export-gpx').addEventListener('click', exportGpx);
@@ -1106,4 +1204,4 @@ else if (!token) showSetup();
 else toast('The map couldn’t load. Check your connection and reopen the app.', 60000);
 
 // Handy for debugging from the browser console.
-window.walktracker = { city, db, rebuild, settings, view, get rec() { return rec; } };
+window.walktracker = { city, db, rebuild, settings, view, awake, get rec() { return rec; } };

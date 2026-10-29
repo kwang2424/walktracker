@@ -58,6 +58,26 @@
   </header>
 
 
+  <!-- The phone closed the app mid-walk -->
+  <section id="resume" class="card notice" hidden>
+    <b>Continue your walk?</b>
+    <p class="muted" id="resume-info"></p>
+    <div class="notice-actions">
+      <button id="btn-resume" class="btn btn-primary">Continue walk</button>
+      <button id="btn-resume-finish" class="btn btn-ghost">Save &amp; finish</button>
+    </div>
+  </section>
+
+  <!-- iPhone, in a Safari tab: data is erased after 7 days without a visit -->
+  <section id="install" class="card notice" hidden>
+    <b>Add WalkTracker to your Home Screen</b>
+    <p class="muted">In a Safari tab, iPhone erases a site's data after 7 days without a visit, including your walks.
+      Home Screen apps are kept. Tap <b>Share</b>, then <b>Add to Home Screen</b>, and open it from there.</p>
+    <div class="notice-actions">
+      <button id="btn-install-ok" class="btn btn-primary">Got it</button>
+    </div>
+  </section>
+
   <div id="legend" aria-hidden="true">
     <span><i class="sw sw-walked"></i>Walked</span>
     <span><i class="sw sw-partial"></i>Partly</span>

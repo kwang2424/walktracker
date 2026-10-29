@@ -67,11 +67,15 @@ Any static host works too (Netlify, Cloudflare Pages, your own server). HTTPS is
 
 ## Limitations
 
-- **Don't lock the phone while recording.** Web apps can't use GPS while the phone is locked, so the app keeps
-  the screen awake and uses the black battery saver screen instead. If you'd rather lock your phone, record
-  with any GPS app that exports GPX and import the file afterward.
-- Your data lives in this browser on this device. Export backups now and then. Deleting the home-screen
-  app or clearing site data deletes it.
+- **Keep the app open while recording.** Web apps can't use GPS in the background or with the phone locked.
+  The app keeps the screen on for you (the Wake Lock API, plus a tiny silent looping video on iPhone, where
+  Wake Lock is unreliable) and switches to the black battery saver screen. If you lock the phone or switch apps
+  anyway, that stretch isn't tracked; when you come back, GPS restarts and the app tells you how long it missed.
+  If the phone closes the app mid-walk, reopening it offers to continue the walk. To lock your phone while
+  walking, record with any GPS app that exports GPX and import the file afterward.
+- **iPhone: use it from the Home Screen.** In a Safari tab, iOS erases a site's data after 7 days without a visit,
+  which would delete your walks. Home Screen apps are exempt; the app reminds you if you're in a tab.
+  Export a backup now and then either way.
 - **What Mapbox receives:** map tile requests for the areas you view (with your token and IP address), a
   "map load" count once per app launch with a random anonymous ID, and a daily active-user ping. Mapbox's
   performance reports are switched off. Your walks, GPS positions and progress are never sent.
@@ -118,6 +122,7 @@ node scripts/build_city.mjs streets.json data/nyc
 | `js/geo.js` | Splits OSM streets into blocks, matches GPS tracks to blocks, computes stats |
 | `js/gpx.js` | GPX import/export |
 | `js/power.js` | Stillness and motion detection for smart GPS |
+| `js/awake.js` | Keeps the screen on during walks |
 | `js/stats.js` | Weekly stats, streaks, when each block was finished |
 | `js/db.js` | On-device storage (IndexedDB), backup export/import |
 | `js/city.js` | Loads NYC neighborhoods on demand and tracks progress in each |

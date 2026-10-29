@@ -4,9 +4,11 @@ The same WalkTracker app, as a real iPhone app, so it can:
 
 - **keep recording with the phone locked** or the app in the background, and
 - **record walks automatically**: the motion sensor notices when you start walking, and the walk is
-  recorded even if the app is closed. Between walks only low-power location runs.
+  recorded even if the app is closed. Between walks only low-power location runs, and
+- **import walks from Apple Health**: walking, running and hiking workouts with a GPS route (Apple Watch or
+  iPhone), so your past walks count too. Read-only; new workouts are added whenever you open the app.
 
-It's built only from Apple's own frameworks (WebKit, Core Location, Core Motion, SwiftUI): no third-party
+It's built only from Apple's own frameworks (WebKit, Core Location, Core Motion, HealthKit, SwiftUI): no third-party
 code or plugins. The web app's files are built into the app; only NYC's street data is downloaded from the
 website (and cached for offline use). Your walks stay in the app's private storage on your phone.
 
@@ -37,6 +39,8 @@ You need a Mac with **Xcode** (free from the Mac App Store, version 16 or newer)
   (the app has no web address to restrict it to).
 - Allow location. To record walks automatically: Menu → Settings → **Record walks automatically**, then
   allow motion access and set location to **Always** (iPhone asks; or Settings → WalkTracker → Location).
+- To bring in past walks: Menu → Settings → **Import walks from Apple Health**, and allow access to Workouts
+  and Workout Routes when Apple asks. (Apple Health works with a free Apple ID.)
 - Your walks from the website don't move over automatically. Export a backup there (Settings → Export
   backup) and import it in the app.
 
@@ -59,6 +63,8 @@ Pull the latest code (`git pull` in the `walktracker` folder) and press **▶ Ru
 | `WalkTracker/NativeBridge.swift` | Connects the page to the phone: GPS in place of the browser's, and app commands |
 | `WalkTracker/LocationService.swift` | GPS and motion: walks you start, and automatic walks |
 | `WalkTracker/WalkJournal.swift` | Saves walks recorded in the background until the app takes them |
+| `WalkTracker/HealthImporter.swift` | Reads walking workouts and their routes from Apple Health (read-only) |
+| `WalkTracker.entitlements` | Turns on Apple Health access |
 | `WalkTracker/AppConfig.swift` | The website address for street data |
 | `copy-web-app.sh` | Build step that copies the web app into the iPhone app |
 

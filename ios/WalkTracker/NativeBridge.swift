@@ -84,6 +84,7 @@ final class LocationMessages: NSObject, WKScriptMessageHandler {
 @MainActor
 final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
     private let location: LocationService
+    private let health = HealthImporter()
 
     init(location: LocationService) {
         self.location = location
@@ -114,6 +115,20 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
         case "setAutoTrack":
             location.setAutoTrack(body["on"] as? Bool ?? false)
             return (location.status(), nil)
+        case "healthAvailable":
+            return (health.isAvailable, nil)
+        case "healthImport":
+            // A page of workouts after `since`; the page keeps asking while `more` is true.
+            guard health.isAvailable else { return (nil, "Apple Health isn't available on this device") }
+            do {
+                try await health.authorize()
+                let since = (body["since"] as? NSNumber)?.doubleValue ?? 0
+                let limit = (body["limit"] as? NSNumber)?.intValue ?? 20
+                let page = try await health.walks(since: since, limit: limit)
+                return (["walks": page.walks, "more": page.more, "cursor": page.cursor] as [String: Any], nil)
+            } catch {
+                return (nil, error.localizedDescription)
+            }
         case "openSettings":
             if let url = URL(string: UIApplication.openSettingsURLString) { await UIApplication.shared.open(url) }
             return (true, nil)

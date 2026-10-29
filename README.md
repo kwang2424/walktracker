@@ -14,6 +14,10 @@ No account, no server, and no tracking. It's a small web app you host yourself f
 - **Progress card**: shows the neighborhood in the middle of the map (its %, blocks and km walked), with a switch to
   widen it to the borough or all of NYC. Tap the name to zoom to it. Plus this week's distance, new blocks and your streak.
 - **Per-street progress** for every street in each borough, with filters: in progress, not started, done.
+- **Stats**: distance, walks, blocks, neighborhoods visited and finished, longest walk, best and current streak,
+  a weekly distance chart and a calendar of walking days (tap the progress ring, or Menu › Progress).
+- **Achievements**: 30 badges for blocks, distance, finished streets and neighborhoods (90%+), all five boroughs,
+  % of NYC and streaks, with progress toward each and a note when you earn one.
 - **Import past walks** from GPX files (Strava, Garmin, Google Takeout, Apple Health via an export app, etc.).
 - **Fix mistakes**: tap any block to mark it walked or not walked by hand.
 - **Own your data**: export a full backup (`.json`) or all walks as `.gpx` at any time. Import the backup on another device.
@@ -24,7 +28,7 @@ No account, no server, and no tracking. It's a small web app you host yourself f
 ## iPhone app
 
 There's also a real iPhone app in [`ios/`](ios/README.md): the same app, but it keeps recording with the phone
-locked and can record walks automatically when you start walking. It uses only Apple's frameworks and installs
+locked, can record walks automatically when you start walking, and can import walks from Apple Health. It uses only Apple's frameworks and installs
 from a Mac with a free Apple ID (reinstall every 7 days). See [ios/README.md](ios/README.md).
 
 ## Battery
@@ -130,6 +134,8 @@ node scripts/build_city.mjs streets.json data/nyc
 | `js/power.js` | Stillness and motion detection for smart GPS |
 | `js/awake.js` | Keeps the screen on during walks |
 | `js/native.js` | Extra features when running inside the iPhone app |
+| `js/achievements.js` | Achievement definitions and how they're earned |
+| `js/charts.js` | The Stats page charts |
 | `js/stats.js` | Weekly stats, streaks, when each block was finished |
 | `js/db.js` | On-device storage (IndexedDB), backup export/import |
 | `js/city.js` | Loads NYC neighborhoods on demand and tracks progress in each |

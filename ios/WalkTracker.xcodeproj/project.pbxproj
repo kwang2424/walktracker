@@ -10,6 +10,7 @@
 		AA0000000000000000000001 /* WalkTracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WalkTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA0000000000000000000003 /* copy-web-app.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "copy-web-app.sh"; sourceTree = "<group>"; };
+		AA0000000000000000000004 /* WalkTracker.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WalkTracker.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -37,6 +38,7 @@
 				AA0000000000000000000010 /* WalkTracker */,
 				AA0000000000000000000002 /* Info.plist */,
 				AA0000000000000000000003 /* copy-web-app.sh */,
+				AA0000000000000000000004 /* WalkTracker.entitlements */,
 				AA0000000000000000000031 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -198,6 +200,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = WalkTracker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
@@ -220,6 +223,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = WalkTracker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";

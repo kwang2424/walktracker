@@ -233,10 +233,59 @@ dialog#sheet::backdrop { background: rgba(15, 23, 42, 0.35); }
 @keyframes sheet-up { from { transform: translateY(100%); } }
 .sheet-head { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 8px 0 10px; touch-action: none; }
 .handle { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto 10px; }
-.tabs { display: grid; grid-template-columns: 1.35fr 1fr 1fr 1fr; gap: 4px; background: var(--surface); padding: 4px; border-radius: 14px; }
+.tabs { display: grid; grid-template-columns: 1.45fr 1fr 1fr 1.1fr 0.55fr; gap: 4px; background: var(--surface); padding: 4px; border-radius: 14px; }
 .tabs button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border-radius: 10px; font-size: 11.5px; font-weight: 600; color: var(--muted); min-width: 0; letter-spacing: -0.01em; }
 .tabs button svg { width: 20px; height: 20px; }
 .tabs button[aria-selected="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.tabs .tab-icon { justify-content: center; }
+
+/* ---------- Progress: stats + achievements ---------- */
+#hud-ring { padding: 0; cursor: pointer; }
+.progress-switch { grid-template-columns: 1fr 1fr; margin: 4px 0 6px; }
+.progress-switch button[aria-pressed="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.tile { background: var(--surface); border-radius: 14px; padding: 12px; }
+.tile .label { font-size: 12.5px; color: var(--muted); }
+.tile .value { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; margin-top: 2px; }
+.tile .sub { font-size: 12px; color: var(--muted); }
+.chart-box { background: var(--surface); border-radius: 14px; padding: 10px 10px 8px; }
+/* Charts opt out of the icon defaults set on every svg above. */
+.chart { display: block; width: 100%; height: auto; overflow: visible; fill: initial; stroke: none; stroke-width: 0; }
+.chart-readout { font-size: 13px; font-weight: 600; min-height: 18px; margin-bottom: 6px; }
+.chart-grid { stroke: var(--line); stroke-width: 1; }
+.chart-tick { fill: var(--muted); font-size: 10.5px; font-family: inherit; }
+.chart-value { fill: var(--fg); font-size: 11px; font-weight: 700; font-family: inherit; }
+.chart-bar { fill: var(--walked); transition: opacity 0.15s; }
+.chart-bar.dim { opacity: 0.35; }
+.chart-hit { fill: transparent; cursor: pointer; }
+/* Walking days: one green ramp, light (a little) to dark (a lot); dark mode has its own steps. */
+:root { --heat-0: #e5e7eb; --heat-1: #a7f3d0; --heat-2: #34d399; --heat-3: #059669; --heat-4: #065f46; }
+@media (prefers-color-scheme: dark) {
+  :root { --heat-0: #273244; --heat-1: #065f46; --heat-2: #059669; --heat-3: #34d399; --heat-4: #a7f3d0; }
+}
+.heat { cursor: pointer; }
+.heat-0 { fill: var(--heat-0); background: var(--heat-0); }
+.heat-1 { fill: var(--heat-1); background: var(--heat-1); }
+.heat-2 { fill: var(--heat-2); background: var(--heat-2); }
+.heat-3 { fill: var(--heat-3); background: var(--heat-3); }
+.heat-4 { fill: var(--heat-4); background: var(--heat-4); }
+.heat.picked { stroke: var(--fg); stroke-width: 1.5; }
+.heat-legend { display: flex; align-items: center; justify-content: flex-end; gap: 3px; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.heat-legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.heat-legend span { margin: 0 3px; }
+.awards-head { margin: 10px 2px 2px; font-weight: 600; }
+.award-group { margin-top: 14px; }
+.award-group h4 { margin: 0 2px 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.award { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 14px; background: var(--surface); margin-bottom: 6px; }
+.award .icon { width: 40px; height: 40px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 20px; background: var(--bg); }
+.award.locked .icon { filter: grayscale(1); opacity: 0.45; }
+.award .text { flex: 1; min-width: 0; }
+.award .title { font-weight: 650; }
+.award .desc { font-size: 12.5px; color: var(--muted); }
+.award .bar { height: 5px; background: var(--line); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+.award .bar div { height: 100%; background: var(--walked); border-radius: 3px; }
+.award .state { font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.award.earned .state { color: var(--accent); }
 
 .search input {
   width: 100%; font: inherit; padding: 11px 14px; border-radius: 12px; border: none;

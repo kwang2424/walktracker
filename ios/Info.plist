@@ -28,6 +28,10 @@
 	<string>WalkTracker uses your location to color in the blocks you walk. Your location stays on this phone.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>With "Always", WalkTracker can record walks automatically, even when the app isn't open. Your location stays on this phone.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>WalkTracker can import your walking, running and hiking workouts (with their routes) from Apple Health, so past walks count too. Nothing leaves your phone.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>WalkTracker doesn't write to Apple Health.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>WalkTracker uses motion to notice when you start and stop walking, so it only turns on GPS while you walk.</string>
 	<key>UIBackgroundModes</key>

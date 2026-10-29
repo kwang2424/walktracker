@@ -2,7 +2,9 @@ import { haversine, polylineLength, pointInMultiPolygon } from './geo.js';
 import { parseGpx, toGpx } from './gpx.js';
 import { db } from './db.js';
 import { StillnessDetector, MotionWake, throttle } from './power.js';
-import { streak, weekStats } from './stats.js';
+import { streak, weekStats, totals, bestStreak, weeklyTotals, dailyTotals } from './stats.js';
+import { evaluate, factsFrom } from './achievements.js';
+import { weeklyChart, calendarChart } from './charts.js';
 import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, CITY_BASE, overrideWalked } from './city.js';
@@ -265,6 +267,7 @@ function renderStats() {
   s.hoods.forEach((h, i) => view.setHoodProgress(i, h.length ? h.walkedLength / h.length : 0));
   $('#hud').hidden = !!rec;
   if ($('#sheet').open) renderSheet();
+  checkAchievements();
 }
 const updateStats = throttle(renderStats, 1000);
 
@@ -278,9 +281,10 @@ async function rebuild() {
   const ids = new Set(city.setTracks(tracks));
   for (const v of Object.values(overrides)) if (v?.hood) ids.add(v.hood);
   drawTracks();
-  if (ids.size > 4) toast('Loading your progress…', 15000);
+  const missing = [...ids].filter((id) => !city.loaded.has(id));
+  if (missing.length > 4) toast('Loading your progress…', 15000);
   await city.ensure([...ids]).catch((err) => console.warn('Some neighborhoods did not load', err));
-  if (ids.size > 4) toast('');
+  if (missing.length > 4) toast('');
   drawBlocks();
   renderStats();
 }
@@ -311,10 +315,12 @@ async function load() {
   }
   view.setHoods(outlines);
   await importNativeWalks();
+  if (settings.healthAuto) await importHealth({ quiet: true });
   await rebuild();
   if (resumable) showResumeCard(resumable);
   else centerOnMe({ quiet: true });
   maybeShowInstallTip();
+  loadStreetTotals().then(() => checkAchievements()); // street totals are needed for street achievements
 }
 
 // ---------------------------------------------------------------- unfinished walks + install tip
@@ -970,6 +976,7 @@ function renderSheet() {
   if (activeTab === 'walks') renderWalks();
   if (activeTab === 'hoods') renderHoods();
   if (activeTab === 'settings') renderSettings();
+  if (activeTab === 'progress') renderProgress();
 }
 
 function row({ title, sub, frac, pct, badge, actions = [], onOpen }) {
@@ -1014,6 +1021,106 @@ const STREET_FILTERS = {
   done: { test: (f) => f >= 1, sort: (a, b) => a.name.localeCompare(b.name), empty: 'No streets finished yet.' },
   all: { test: () => true, sort: (a, b) => b.frac - a.frac || b.length - a.length, empty: 'No streets match.' },
 };
+
+// ---------------------------------------------------------------- progress: stats + achievements
+let progressView = 'stats';
+
+function progressFacts(streets) {
+  return factsFrom({
+    summary: lastSummary,
+    tracksTotals: totals(tracks),
+    streets,
+    walkedByStreet: city.streetProgress(overrides),
+    bestStreak: bestStreak(tracks),
+  });
+}
+
+async function renderProgress() {
+  document.querySelectorAll('#progress-switch button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.view === progressView));
+  $('#stats-view').hidden = progressView !== 'stats';
+  $('#awards-view').hidden = progressView !== 'awards';
+  if (!lastSummary) return;
+  if (progressView === 'stats') renderStatsView();
+  else renderAwards(await loadStreetTotals());
+}
+
+function tile(label, value, sub = '') {
+  const d = document.createElement('div');
+  d.className = 'tile';
+  d.innerHTML = '<div class="label"></div><div class="value"></div><div class="sub"></div>';
+  d.querySelector('.label').textContent = label;
+  d.querySelector('.value').textContent = value;
+  d.querySelector('.sub').textContent = sub;
+  return d;
+}
+
+function renderStatsView() {
+  const t = totals(tracks);
+  const s = lastSummary;
+  const visited = s.hoods.filter((h) => h.walked > 0).length;
+  const finished = s.hoods.filter((h) => h.length && h.walkedLength >= 0.9 * h.length).length;
+  const cityPct = s.length ? (100 * s.walkedLength) / s.length : 0;
+  $('#stat-tiles').replaceChildren(
+    tile('Distance walked', km(t.meters), `${t.walks.toLocaleString()} walk${t.walks === 1 ? '' : 's'}`),
+    tile('Blocks walked', s.walked.toLocaleString(), `${fmtPct(cityPct)} of NYC`),
+    tile('Neighborhoods', `${visited} visited`, `${finished} finished`),
+    tile('Longest walk', km(t.longest), ''),
+    tile('Best streak', `${bestStreak(tracks)} day${bestStreak(tracks) === 1 ? '' : 's'}`, `Current: ${streak(tracks)}`),
+    tile('This week', km(weekStats(tracks, city.completedAt).meters), `${weekStats(tracks, city.completedAt).blocks} new blocks`),
+  );
+  weeklyChart($('#chart-weekly'), weeklyTotals(tracks, city.completedAt, 12));
+  calendarChart($('#chart-days'), dailyTotals(tracks, 16));
+}
+
+function renderAwards(streets) {
+  const list = evaluate(progressFacts(streets));
+  const earned = list.filter((a) => a.earned).length;
+  $('#awards-head').textContent = `${earned} of ${list.length} earned`;
+  const box = $('#awards-list');
+  box.replaceChildren();
+  const groups = [...new Set(list.map((a) => a.group))];
+  for (const g of groups) {
+    const section = document.createElement('div');
+    section.className = 'award-group';
+    section.innerHTML = '<h4></h4>';
+    section.querySelector('h4').textContent = g;
+    for (const a of list.filter((x) => x.group === g)) {
+      const d = document.createElement('div');
+      d.className = `award ${a.earned ? 'earned' : 'locked'}`;
+      d.innerHTML = `<div class="icon" aria-hidden="true"></div><div class="text"><div class="title"></div><div class="desc"></div>${
+        a.earned ? '' : `<div class="bar"><div style="width:${(a.progress * 100).toFixed(1)}%"></div></div>`}</div><div class="state"></div>`;
+      d.querySelector('.icon').textContent = a.icon;
+      d.querySelector('.title').textContent = a.title;
+      d.querySelector('.desc').textContent = a.desc;
+      d.querySelector('.state').textContent = a.earned ? 'Earned' : `${Math.min(a.value, a.target).toLocaleString()} / ${a.target.toLocaleString()}`;
+      section.append(d);
+    }
+    box.append(section);
+  }
+}
+
+// A note (and a buzz) the first time each achievement is earned. The first check
+// on a device just records what's already earned, so nothing old is announced.
+const SEEN_KEY = 'walktracker.achievementsSeen';
+let checkingAwards = false;
+async function checkAchievements() {
+  if (!lastSummary || checkingAwards || !streetTotals) return;
+  checkingAwards = true;
+  try {
+    const earned = evaluate(progressFacts(await loadStreetTotals())).filter((a) => a.earned);
+    let seen = null;
+    try { seen = JSON.parse(localStorage.getItem(SEEN_KEY) || 'null'); } catch { /* ignore */ }
+    const fresh = seen ? earned.filter((a) => !seen.includes(a.id)) : [];
+    try { localStorage.setItem(SEEN_KEY, JSON.stringify(earned.map((a) => a.id))); } catch { /* ignore */ }
+    if (fresh.length) {
+      navigator.vibrate?.([30, 60, 30]);
+      const a = fresh[fresh.length - 1];
+      toast(`🏆 New achievement: ${a.title}${fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ''}`, 4000);
+    }
+  } finally {
+    checkingAwards = false;
+  }
+}
 
 async function loadStreetTotals() {
   streetTotals ||= fetch(CITY_BASE + 'streets.json').then((r) => r.json()).catch(() => null);
@@ -1082,7 +1189,7 @@ function renderWalks() {
     const n = city.newByTrack.get(t.id) || 0;
     list.append(row({
       title: when,
-      sub: [km(dist), mins ? `${mins} min` : '', t.source === 'gpx' ? 'imported' : ''].filter(Boolean).join(' · '),
+      sub: [km(dist), mins ? `${mins} min` : '', SOURCE_LABEL[t.source] || ''].filter(Boolean).join(' · '),
       badge: n ? `+${n} block${n === 1 ? '' : 's'}` : '',
       actions: [['Delete', async () => {
         if (!confirm('Delete this walk?')) return;
@@ -1141,6 +1248,7 @@ function renderSettings() {
   $('#native-settings').hidden = !native;
   $('#battery-settings').hidden = !!native;
   if (native) native.call('status').then(renderNativeStatus).catch(() => {});
+  if (native) native.call('healthAvailable').then((ok) => { $('#health-settings').hidden = !ok; }).catch(() => {});
   document.querySelectorAll('#map-theme button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.theme === settings.mapTheme));
   renderStorageInfo();
 }
@@ -1168,10 +1276,54 @@ async function importNativeWalks() {
 window.addEventListener('native-walks', async () => {
   if (!city.index) return;
   const added = await importNativeWalks();
-  if (!added) return;
+  const fromHealth = settings.healthAuto ? await importHealth({ quiet: true, rebuildAfter: false }) : 0;
+  if (!added && !fromHealth) return;
   await rebuild();
-  toast(`Added ${added} walk${added === 1 ? '' : 's'} recorded automatically`, 4000);
+  toast([added && `Added ${added} walk${added === 1 ? '' : 's'} recorded automatically`,
+    fromHealth && `${fromHealth} from Apple Health`].filter(Boolean).join(' · '), 4000);
 });
+
+const SOURCE_LABEL = { gpx: 'imported', auto: 'automatic', health: 'Apple Health' };
+
+// Walking/running/hiking workouts with a GPS route from Apple Health. Fetched in
+// pages after a saved cursor, so each workout is only read once.
+let importingHealth = false;
+async function importHealth({ quiet = false, rebuildAfter = true } = {}) {
+  if (!native || importingHealth) return 0;
+  importingHealth = true;
+  let added = 0;
+  try {
+    let since = (await db.get('meta', 'healthCursor').catch(() => 0)) || 0;
+    const have = new Set(tracks.map((t) => t.nativeId).filter(Boolean));
+    for (let page = 0; page < 200; page++) {
+      const res = await native.call('healthImport', { since, limit: 20 });
+      for (const w of res.walks) {
+        if (have.has(w.id)) continue;
+        const t = nativeWalkToTrack(w, 'health');
+        t.id = await db.put('tracks', t);
+        tracks.push(t);
+        have.add(w.id);
+        added++;
+      }
+      since = res.cursor;
+      await db.put('meta', since, 'healthCursor');
+      if (!quiet) toast(`Importing from Apple Health… ${added} walk${added === 1 ? '' : 's'}`, 30000);
+      if (!res.more) break;
+    }
+    if (!settings.healthAuto) { settings.healthAuto = true; saveSettings(); }
+    if (added && rebuildAfter) await rebuild();
+    if (!quiet) {
+      toast(added
+        ? `Imported ${added} walk${added === 1 ? '' : 's'} from Apple Health`
+        : 'No new walks with a route in Apple Health. (If you didn’t allow access, turn it on in the Health app › Sharing › Apps › WalkTracker.)', 6000);
+    }
+  } catch (err) {
+    if (!quiet) toast(`Couldn’t read Apple Health: ${err.message || err}`, 6000);
+  } finally {
+    importingHealth = false;
+  }
+  return added;
+}
 
 function renderNativeStatus(st) {
   if (!st) return;
@@ -1260,7 +1412,13 @@ $('#btn-resume-finish').addEventListener('click', finishResumable);
 $('#btn-install-ok').addEventListener('click', dismissInstallTip);
 $('#opt-autotrack').addEventListener('change', (e) => native?.call('setAutoTrack', { on: e.target.checked }).then(renderNativeStatus));
 $('#btn-native-settings').addEventListener('click', () => native?.call('openSettings'));
+$('#btn-health-import').addEventListener('click', () => importHealth());
 $('#hud-place').addEventListener('click', showHudPlace);
+$('#hud-ring').addEventListener('click', () => { openSheet(); selectTab('progress'); });
+document.querySelectorAll('#progress-switch button').forEach((b) => b.addEventListener('click', () => {
+  progressView = b.dataset.view;
+  renderProgress();
+}));
 document.querySelectorAll('#hud-scope button').forEach((b) => b.addEventListener('click', () => setHudScope(b.dataset.scope)));
 $('#btn-export-backup').addEventListener('click', exportBackup);
 $('#btn-export-gpx').addEventListener('click', exportGpx);

@@ -65,3 +65,85 @@ export function weekStats(tracks, completedAt, now = Date.now()) {
   for (const time of completedAt.values()) if (time >= from) blocks++;
   return { meters, walks, blocks };
 }
+
+// ---- For the Stats page ----------------------------------------------------
+
+const metersOf = (t) => t.distance ?? polylineLength(t.points);
+
+// Totals across all walks.
+export function totals(tracks) {
+  let meters = 0, longest = 0;
+  for (const t of tracks) {
+    const m = metersOf(t);
+    meters += m;
+    if (m > longest) longest = m;
+  }
+  return { walks: tracks.length, meters, longest };
+}
+
+// Longest run of consecutive days with at least `minMeters` walked.
+export function bestStreak(tracks, minMeters = 200) {
+  const perDay = new Map();
+  for (const t of tracks) {
+    const d = new Date(t.startedAt);
+    d.setHours(12, 0, 0, 0);
+    perDay.set(d.getTime(), (perDay.get(d.getTime()) || 0) + metersOf(t));
+  }
+  const days = [...perDay].filter(([, m]) => m >= minMeters).map(([k]) => k).sort((a, b) => a - b);
+  let best = 0, run = 0, prev = null;
+  for (const day of days) {
+    // Noon-to-noon is 23-25 h across daylight saving changes.
+    run = prev != null && Math.abs(day - prev - DAY) < 2 * 3600000 ? run + 1 : 1;
+    best = Math.max(best, run);
+    prev = day;
+  }
+  return best;
+}
+
+// The last `weeks` weeks (Monday to Sunday), oldest first:
+// [{ start, meters, walks, blocks }]
+export function weeklyTotals(tracks, completedAt, weeks = 12, now = Date.now()) {
+  const thisWeek = startOfWeek(now);
+  const starts = [];
+  for (let i = weeks - 1; i >= 0; i--) {
+    const d = new Date(thisWeek);
+    d.setDate(d.getDate() - 7 * i);
+    starts.push(d.getTime());
+  }
+  const out = starts.map((start) => ({ start, meters: 0, walks: 0, blocks: 0 }));
+  const bucket = (time) => {
+    if (time < starts[0]) return null;
+    let i = starts.length - 1;
+    while (i > 0 && time < starts[i]) i--;
+    return out[i];
+  };
+  for (const t of tracks) {
+    const b = bucket(t.startedAt);
+    if (b) { b.meters += metersOf(t); b.walks++; }
+  }
+  for (const time of completedAt.values()) {
+    const b = bucket(time);
+    if (b) b.blocks++;
+  }
+  return out;
+}
+
+// Meters walked per day for the last `weeks` whole weeks (Monday-aligned, so
+// it fits a calendar grid), oldest first: [{ date, meters }]
+export function dailyTotals(tracks, weeks = 16, now = Date.now()) {
+  const first = new Date(startOfWeek(now));
+  first.setDate(first.getDate() - 7 * (weeks - 1));
+  const days = [];
+  const index = new Map();
+  for (let i = 0; i < weeks * 7; i++) {
+    const d = new Date(first);
+    d.setDate(first.getDate() + i);
+    index.set(dayKey(d.getTime()), days.length);
+    days.push({ date: d.getTime(), meters: 0 });
+  }
+  for (const t of tracks) {
+    const i = index.get(dayKey(t.startedAt));
+    if (i != null) days[i].meters += metersOf(t);
+  }
+  return days;
+}

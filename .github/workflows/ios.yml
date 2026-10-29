@@ -30,3 +30,20 @@ jobs:
           ls "$APP"
           test -f "$APP/web/index.html" && test -f "$APP/web/js/app.js" && test -f "$APP/web/js/native.js"
           /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP/Info.plist"
+      - name: Launch in the iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          devices = json.load(sys.stdin)['devices']
+          print(next(d['udid'] for runtime, ds in devices.items() if 'iOS' in runtime for d in ds if d['name'].startswith('iPhone')))")
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b > /dev/null
+          xcrun simctl install "$UDID" ios-build/Debug-iphonesimulator/WalkTracker.app
+          xcrun simctl launch "$UDID" io.github.kwang2424.walktracker
+          sleep 25
+          # Still running (didn't crash on launch)?
+          xcrun simctl spawn "$UDID" launchctl list | grep -q io.github.kwang2424.walktracker
+          xcrun simctl io "$UDID" screenshot "$RUNNER_TEMP/launch.png"
+          sips -Z 700 -s format jpeg "$RUNNER_TEMP/launch.png" --out "$RUNNER_TEMP/launch.jpg" > /dev/null
+          # Printed so the result can be checked straight from the log.
+          echo "SCREENSHOT_BEGIN"; base64 -i "$RUNNER_TEMP/launch.jpg"; echo "SCREENSHOT_END"

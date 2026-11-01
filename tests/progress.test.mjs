@@ -64,7 +64,11 @@ test('factsFrom counts finished streets and neighborhoods at 90%', () => {
     ['Oak Ave|Queens', { walkedLength: FINISHED * 200 }],
   ]);
   const f = factsFrom({ summary: summary(), tracksTotals: { meters: 12345 }, streets, walkedByStreet, bestStreak: 4 });
-  assert.deepEqual(f, { blocks: 120, km: 12, streetsDone: 2, hoodsVisited: 2, hoodsHalf: 2, hoodsDone: 1, boroughsVisited: 2, cityPct: 1, bestStreak: 4 });
+  assert.deepEqual(f, { blocks: 120, km: 12, streetsDone: 2, hoodsVisited: 2, hoodsHalf: 2, hoodsDone: 1, boroughsVisited: 2, cityPct: 1, bestStreak: 4,
+    landmarks: 0, stations: 0, linesDone: 0 });
+  const withPlaces = factsFrom({ summary: summary(), tracksTotals: { meters: 0 }, streets: [], walkedByStreet: new Map(), bestStreak: 0,
+    places: { landmarks: 12, stations: 30, linesDone: 1 } });
+  assert.deepEqual([withPlaces.landmarks, withPlaces.stations, withPlaces.linesDone], [12, 30, 1]);
 });
 
 test('evaluate marks earned achievements and progress toward the rest', () => {
@@ -78,5 +82,7 @@ test('evaluate marks earned achievements and progress toward the rest', () => {
   assert.equal(get('hood-1').earned, true);
   assert.equal(get('streak-3').earned, true);
   assert.equal(get('streak-7').earned, false);
+  assert.equal(get('landmark-1').earned, false);
+  assert.equal(get('stations-all').target, 445);
   assert.equal(new Set(ACHIEVEMENTS.map((a) => a.id)).size, ACHIEVEMENTS.length, 'ids are unique');
 });

@@ -90,6 +90,8 @@
     <span><i class="sw sw-walked"></i>Walked</span>
     <span><i class="sw sw-partial"></i>Partly</span>
     <span><i class="sw sw-unwalked"></i>Not yet</span>
+    <span><i class="dot dot-landmark"></i>Landmark</span>
+    <span><i class="dot dot-station"></i>Station</span>
   </div>
 
   <div id="toast" role="status" aria-live="polite"></div>
@@ -185,6 +187,7 @@
       <div class="segmented progress-switch" id="progress-switch">
         <button data-view="stats" aria-pressed="true">Stats</button>
         <button data-view="awards" aria-pressed="false">Achievements</button>
+        <button data-view="places" aria-pressed="false">Places</button>
       </div>
       <div id="stats-view">
         <div class="tiles" id="stat-tiles"></div>
@@ -193,6 +196,21 @@
         <h3>Walking days</h3>
         <div class="chart-box" id="chart-days"></div>
       </div>
+      <div id="places-view" hidden>
+        <div class="tiles" id="place-tiles"></div>
+        <h3>Subway lines</h3>
+        <ul class="list" id="line-list"></ul>
+        <h3>Landmarks &amp; stations</h3>
+        <div class="search"><input id="place-search" type="search" placeholder="Search landmarks and stations" autocomplete="off"></div>
+        <div class="filters" id="place-filters">
+          <button data-f="near" aria-pressed="true">Near the map</button>
+          <button data-f="visited" aria-pressed="false">Visited</button>
+          <button data-f="todo" aria-pressed="false">Not yet</button>
+        </div>
+        <ul class="list" id="place-list"></ul>
+        <p class="muted small credit">Landmarks: NYC Landmarks Preservation Commission. Stations: MTA. A landmark counts when you pass within 40 m of it, a station within 60 m.</p>
+      </div>
+
       <div id="awards-view" hidden>
         <p class="awards-head" id="awards-head"></p>
         <div id="awards-list"></div>

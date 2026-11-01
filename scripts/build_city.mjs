@@ -9,9 +9,10 @@
 //   neighborhoods.geojson simplified outlines for the map
 //   streets.json          every street (per borough) with its block count and length
 //   hoods/<id>.json       the blocks of one neighborhood
+//   places.json           landmarks and subway stations (from scripts/data)
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildCity } from './citylib.mjs';
+import { buildCity, buildPlaces } from './citylib.mjs';
 
 const [rawPath, outDir] = process.argv.slice(2);
 if (!rawPath || !outDir) {
@@ -30,7 +31,11 @@ write('index.json', city.index);
 write('neighborhoods.geojson', city.outlines);
 write('streets.json', city.streets);
 for (const [id, file] of Object.entries(city.files)) write(join('hoods', `${id}.json`), file);
+const readData = (name) => JSON.parse(readFileSync(new URL(`./data/${name}`, import.meta.url), 'utf8'));
+const places = buildPlaces(readData('nyc-landmarks.json'), readData('nyc-subway-stations.json'), city.hoods);
+write('places.json', places);
 
 const { total, hoods } = city.index;
 console.log(`${total.blocks} blocks (${(total.length / 1000).toFixed(0)} km) in ${hoods.length} neighborhoods; ` +
-  `${city.outside} blocks outside NYC skipped; ${city.streets.length} streets`);
+  `${city.outside} blocks outside NYC skipped; ${city.streets.length} streets; ` +
+  `${places.landmarks.length} landmarks, ${places.stations.length} stations`);

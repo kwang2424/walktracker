@@ -6,6 +6,7 @@ import { streak, weekStats, totals, bestStreak, weeklyTotals, dailyTotals } from
 import { evaluate, factsFrom } from './achievements.js';
 import { weeklyChart, calendarChart } from './charts.js';
 import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
+import { Places, ROUTE_COLORS } from './places.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, CITY_BASE, overrideWalked } from './city.js';
 import { KeepAwake, isIOS } from './awake.js';
@@ -40,6 +41,8 @@ let tracks = [];
 let nodeNames = new Map(); // OSM node id -> street names meeting there
 let lastSummary = null;
 let outlines = null; // neighborhood outlines (GeoJSON)
+let places = null; // landmarks and subway stations
+let placeVisits = new Map(); // place key -> first visit time
 let streetTotals = null; // every street with its block count, loaded when needed
 let rec = null; // the walk being recorded
 let pocketOn = false;
@@ -126,6 +129,7 @@ const view = token && mapLibLoaded ? new MapView($('#map'), {
   colors: readColors(),
   onBlockClick: (id, at) => openBlockPopup(id, at),
   onHoodClick: (i) => openHood(city.index.hoods[i].id),
+  onPlaceClick: (i) => openPlacePopup(i),
   onUserMove: () => { lastDrag = Date.now(); },
   onMoveEnd: () => onMapMoved(),
   onAuthError: (status) => showSetup(`Mapbox didn’t accept this token (error ${status}). Check that it’s copied fully, and if it has URL restrictions, that they include ${location.origin + location.pathname.replace(/index\.html$/, '')}`),
@@ -286,7 +290,16 @@ async function rebuild() {
   await city.ensure([...ids]).catch((err) => console.warn('Some neighborhoods did not load', err));
   if (missing.length > 4) toast('');
   drawBlocks();
+  updatePlaceVisits();
   renderStats();
+}
+
+// Which landmarks and stations your walks have passed (the walk in progress too).
+function updatePlaceVisits() {
+  if (!places) return;
+  const all = rec ? [...tracks, { startedAt: rec.track.startedAt, points: rec.points }] : tracks;
+  placeVisits = places.visits(all);
+  for (const item of places.items) view.setPlaceVisited(item.index, placeVisits.has(item.key));
 }
 
 async function load() {
@@ -314,6 +327,8 @@ async function load() {
     return;
   }
   view.setHoods(outlines);
+  places = await fetch(CITY_BASE + 'places.json').then((r) => r.json()).then((d) => new Places(d)).catch(() => null);
+  if (places) view.setPlaces(places.items);
   await importNativeWalks();
   if (settings.healthAuto) await importHealth({ quiet: true });
   await rebuild();
@@ -556,6 +571,7 @@ function onPosition(pos) {
   else rec.liveDirty = true;
   if (last) {
     rec.dist += haversine(last, p);
+    discoverPlaces(last, p);
     const changed = city.addLiveSegment(last, p);
     if (changed.size) {
       for (const id of changed) {
@@ -1025,6 +1041,113 @@ const STREET_FILTERS = {
 // ---------------------------------------------------------------- progress: stats + achievements
 let progressView = 'stats';
 
+// ---------------------------------------------------------------- landmarks & stations
+function discoverPlaces(a, b) {
+  if (!places) return;
+  for (const item of places.passed(a, b)) {
+    if (placeVisits.has(item.key)) continue;
+    placeVisits.set(item.key, b[2] || Date.now());
+    view.setPlaceVisited(item.index, true);
+    navigator.vibrate?.([20, 40, 20]);
+    if (!asleep()) toast(item.kind === 'landmark' ? `🏛️ Discovered: ${item.name}` : `🚇 New station: ${item.name} · ${item.routes.join(' ')}`, 3500);
+    updateStats();
+  }
+}
+
+function bullet(route, small = false) {
+  const b = document.createElement('span');
+  b.className = `bullet${small ? ' small' : ''}${route.length > 1 ? ' wide' : ''}${['N', 'Q', 'R', 'W'].includes(route) ? ' dark-text' : ''}`;
+  b.style.background = ROUTE_COLORS[route] || '#808183';
+  b.textContent = route;
+  return b;
+}
+
+const visitDate = (time) => new Date(time).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+
+function openPlacePopup(index) {
+  const item = places?.items[index];
+  if (!item) return;
+  const el = document.createElement('div');
+  el.innerHTML = '<div class="pop-title"></div><div class="pop-routes"></div><div class="pop-sub"></div><span class="pop-status"></span>';
+  el.querySelector('.pop-title').textContent = item.name;
+  const hood = item.hood >= 0 ? city.index.hoods[item.hood]?.name : '';
+  if (item.kind === 'station') {
+    item.routes.forEach((r) => el.querySelector('.pop-routes').append(bullet(r, true)));
+    el.querySelector('.pop-sub').textContent = ['Subway station', hood].filter(Boolean).join(' · ');
+  } else {
+    el.querySelector('.pop-routes').remove();
+    const year = (item.designated.match(/\d{4}/) || [])[0];
+    el.querySelector('.pop-sub').textContent = [item.address, hood, year && `Landmark since ${year}`].filter(Boolean).join(' · ');
+  }
+  const when = placeVisits.get(item.key);
+  const status = el.querySelector('.pop-status');
+  status.textContent = when ? `Visited ${visitDate(when)}` : 'Not visited yet';
+  if (when) status.classList.add('walked');
+  view.openPopup([item.lat, item.lon], el);
+}
+
+function showPlace(item) {
+  closeSheet();
+  view.flyTo([item.lat, item.lon], Math.max(view.getZoom(), 16));
+  setTimeout(() => openPlacePopup(item.index), 850);
+}
+
+let placeFilter = 'near';
+function renderPlacesView() {
+  if (!places) {
+    $('#place-tiles').replaceChildren(tile('Landmarks & stations', '–', 'Couldn’t load'));
+    return;
+  }
+  const visitedL = places.landmarks.filter((i) => placeVisits.has(i.key)).length;
+  const visitedS = places.stations.filter((i) => placeVisits.has(i.key)).length;
+  $('#place-tiles').replaceChildren(
+    tile('Landmarks', `${visitedL.toLocaleString()}`, `of ${places.landmarks.length.toLocaleString()} in NYC`),
+    tile('Subway stations', `${visitedS}`, `of ${places.stations.length}`),
+  );
+  const lines = $('#line-list');
+  lines.replaceChildren();
+  for (const l of places.lineProgress(placeVisits)) {
+    const li = row({ title: `${l.route === 'SIR' ? 'Staten Island Railway' : l.route === 'S' ? 'Shuttles' : `${l.route} train`}`,
+      sub: `${l.visited} of ${l.total} stations`, frac: l.visited / l.total, pct: (100 * l.visited) / l.total });
+    li.prepend(bullet(l.route));
+    lines.append(li);
+  }
+
+  const q = $('#place-search').value.trim().toLowerCase();
+  const c = view.getCenter();
+  const dist = (i) => (i.lat - c[0]) ** 2 + ((i.lon - c[1]) * 0.76) ** 2;
+  let items = places.items.filter((i) => !q || i.name.toLowerCase().includes(q) || (i.address || '').toLowerCase().includes(q));
+  if (!q && placeFilter === 'visited') items = items.filter((i) => placeVisits.has(i.key)).sort((a, b) => placeVisits.get(b.key) - placeVisits.get(a.key));
+  else if (!q && placeFilter === 'todo') items = items.filter((i) => !placeVisits.has(i.key)).sort((a, b) => dist(a) - dist(b));
+  else items = items.sort((a, b) => dist(a) - dist(b));
+  const list = $('#place-list');
+  list.replaceChildren();
+  if (!items.length) list.append(emptyRow(placeFilter === 'visited' && !q ? 'Nothing visited yet. Walk past a landmark or a subway station.' : 'Nothing matches.'));
+  for (const item of items.slice(0, 40)) {
+    const when = placeVisits.get(item.key);
+    const hood = item.hood >= 0 ? city.index.hoods[item.hood]?.name : '';
+    const li = row({
+      title: item.name,
+      sub: [item.kind === 'station' ? item.routes.join(' ') : item.address, hood, when && `visited ${visitDate(when)}`].filter(Boolean).join(' · '),
+      onOpen: () => showPlace(item),
+    });
+    const icon = document.createElement('span');
+    icon.className = `place-icon${when ? ' done' : ''}`;
+    icon.textContent = item.kind === 'station' ? '🚇' : '🏛️';
+    li.prepend(icon);
+    list.append(li);
+  }
+}
+
+function placeFacts() {
+  if (!places) return {};
+  return {
+    landmarks: places.landmarks.filter((i) => placeVisits.has(i.key)).length,
+    stations: places.stations.filter((i) => placeVisits.has(i.key)).length,
+    linesDone: places.lineProgress(placeVisits).filter((l) => l.visited === l.total).length,
+  };
+}
+
 function progressFacts(streets) {
   return factsFrom({
     summary: lastSummary,
@@ -1032,6 +1155,7 @@ function progressFacts(streets) {
     streets,
     walkedByStreet: city.streetProgress(overrides),
     bestStreak: bestStreak(tracks),
+    places: placeFacts(),
   });
 }
 
@@ -1039,8 +1163,10 @@ async function renderProgress() {
   document.querySelectorAll('#progress-switch button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.view === progressView));
   $('#stats-view').hidden = progressView !== 'stats';
   $('#awards-view').hidden = progressView !== 'awards';
+  $('#places-view').hidden = progressView !== 'places';
   if (!lastSummary) return;
   if (progressView === 'stats') renderStatsView();
+  else if (progressView === 'places') renderPlacesView();
   else renderAwards(await loadStreetTotals());
 }
 
@@ -1415,6 +1541,12 @@ $('#btn-native-settings').addEventListener('click', () => native?.call('openSett
 $('#btn-health-import').addEventListener('click', () => importHealth());
 $('#hud-place').addEventListener('click', showHudPlace);
 $('#hud-ring').addEventListener('click', () => { openSheet(); selectTab('progress'); });
+$('#place-search').addEventListener('input', renderPlacesView);
+document.querySelectorAll('#place-filters button').forEach((b) => b.addEventListener('click', () => {
+  placeFilter = b.dataset.f;
+  document.querySelectorAll('#place-filters button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+  renderPlacesView();
+}));
 document.querySelectorAll('#progress-switch button').forEach((b) => b.addEventListener('click', () => {
   progressView = b.dataset.view;
   renderProgress();

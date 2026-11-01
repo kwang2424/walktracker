@@ -16,8 +16,11 @@ No account, no server, and no tracking. It's a small web app you host yourself f
 - **Per-street progress** for every street in each borough, with filters: in progress, not started, done.
 - **Stats**: distance, walks, blocks, neighborhoods visited and finished, longest walk, best and current streak,
   a weekly distance chart and a calendar of walking days (tap the progress ring, or Menu › Progress).
-- **Achievements**: 30 badges for blocks, distance, finished streets and neighborhoods (90%+), all five boroughs,
-  % of NYC and streaks, with progress toward each and a note when you earn one.
+- **Landmarks & subway stations**: NYC's 1,451 designated landmarks and all 445 subway stations are on the map.
+  Walk past one (40 m for landmarks, 60 m for stations) and it's yours: a note pops up, it turns solid on the
+  map, and it counts toward per-line progress ("L train: 5 of 24 stations"). Browse them in Progress › Places.
+- **Achievements**: 40 badges for blocks, distance, finished streets and neighborhoods (90%+), all five boroughs,
+  % of NYC, streaks, landmarks, stations and whole subway lines, with progress toward each and a note when you earn one.
 - **Import past walks** from GPX files (Strava, Garmin, Google Takeout, Apple Health via an export app, etc.).
 - **Fix mistakes**: tap any block to mark it walked or not walked by hand.
 - **Own your data**: export a full backup (`.json`) or all walks as `.gpx` at any time. Import the backup on another device.
@@ -118,6 +121,11 @@ It runs on every deploy and every Monday, so street changes in OpenStreetMap sho
 The phone downloads a small index and the neighborhood outlines (~85 KB) at startup, then only the
 neighborhoods you look at or have walked in (~20–60 KB each).
 
+Landmarks and subway stations come from NYC Open Data (Landmarks Preservation Commission) and data.ny.gov (MTA).
+They change rarely, so a cleaned-up copy is committed in `scripts/data/`; refresh it with
+`node scripts/update_places.mjs` (it also converts the landmark outlines from State Plane feet to latitude/longitude,
+drops the individually designated street lampposts, and merges landmarks designated in several parts).
+
 To build locally:
 
 ```sh
@@ -136,6 +144,8 @@ node scripts/build_city.mjs streets.json data/nyc
 | `js/native.js` | Extra features when running inside the iPhone app |
 | `js/achievements.js` | Achievement definitions and how they're earned |
 | `js/charts.js` | The Stats page charts |
+| `js/places.js` | Landmarks and subway stations, and which ones your walks passed |
+| `scripts/update_places.mjs` | Refreshes the landmark and station lists from NYC open data |
 | `js/stats.js` | Weekly stats, streaks, when each block was finished |
 | `js/db.js` | On-device storage (IndexedDB), backup export/import |
 | `js/city.js` | Loads NYC neighborhoods on demand and tracks progress in each |

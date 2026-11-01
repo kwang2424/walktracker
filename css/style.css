@@ -147,6 +147,19 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .sw-walked { background: var(--walked); }
 .sw-partial { background: var(--partial); }
 .sw-unwalked { background: var(--unwalked); }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #fff; border: 2px solid; }
+.dot-landmark { border-color: #ca8a04; background: #ca8a04; }
+.dot-station { border-color: #7c3aed; background: #7c3aed; }
+#legend { flex-wrap: wrap; max-width: calc(100% - 24px); row-gap: 2px; }
+/* Subway line bullets */
+.bullet { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 12px; font-weight: 700; color: #fff; flex: none; }
+.bullet.dark-text { color: #111; }
+.bullet.small { width: 18px; height: 18px; font-size: 10.5px; margin-right: 2px; }
+.bullet.wide { width: auto; padding: 0 5px; border-radius: 9px; }
+.list li .lead { flex: none; }
+.place-icon { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 15px; background: var(--surface); }
+.place-icon.done { background: var(--accent-soft); }
+.pop-routes { margin: 4px 0 2px; display: flex; flex-wrap: wrap; gap: 2px; }
 body.recording #legend { display: none; }
 
 /* ---------- Buttons ---------- */
@@ -241,7 +254,7 @@ dialog#sheet::backdrop { background: rgba(15, 23, 42, 0.35); }
 
 /* ---------- Progress: stats + achievements ---------- */
 #hud-ring { padding: 0; cursor: pointer; }
-.progress-switch { grid-template-columns: 1fr 1fr; margin: 4px 0 6px; }
+.progress-switch { grid-template-columns: 1fr 1.3fr 1fr; margin: 4px 0 6px; }
 .progress-switch button[aria-pressed="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
 .tile { background: var(--surface); border-radius: 14px; padding: 12px; }

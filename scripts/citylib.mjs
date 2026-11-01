@@ -135,7 +135,54 @@ export function buildCity(raw, hoodsGeo, { outlineTolerance = 0.0001 } = {}) {
     .map((s) => [s.name, s.borough, s.blocks, Math.round(s.length), [...s.hoods]])
     .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
 
-  return { index, files, outlines, streets: streetList, outside, totalBlocks: blocks.length };
+  return { index, files, outlines, streets: streetList, outside, totalBlocks: blocks.length, hoods: used };
 }
 
 export { polylineLength };
+
+// ---- Landmarks and subway stations ------------------------------------------
+
+// Lines in the order the MTA lists them.
+export const ROUTE_ORDER = ['1', '2', '3', '4', '5', '6', '7', 'A', 'C', 'E', 'B', 'D', 'F', 'M', 'G', 'J', 'Z', 'L', 'N', 'Q', 'R', 'W', 'S', 'SIR'];
+
+const centroid = (ring) => {
+  let x = 0, y = 0;
+  for (const [lon, lat] of ring) { x += lon; y += lat; }
+  return [y / ring.length, x / ring.length];
+};
+
+// landmarksData / stationsData: scripts/data/nyc-landmarks.json and nyc-subway-stations.json.
+// hoods: the neighborhoods that made it into index.json, in order, each with .multi and .bbox.
+// Output (compact arrays, read by js/places.js):
+//   landmarks: [id, name, address, designated, hoodIndex, [[lon, lat, lon, lat, ...outline], ...]]
+//   stations:  [complexId, name, [routes], borough, hoodIndex, [lat, lon, ...platforms]]
+export function buildPlaces(landmarksData, stationsData, hoods) {
+  const hoodAt = (pt) => hoods.findIndex((h) => {
+    const [s, w, n, e] = h.bbox;
+    return pt[0] >= s && pt[0] <= n && pt[1] >= w && pt[1] <= e && pointInMultiPolygon(pt, h.multi);
+  });
+  const landmarks = landmarksData.landmarks.map((l) => [
+    l.id, l.name, l.address, l.designated, hoodAt(centroid(l.outlines.flat())), l.outlines.map((o) => o.flat()),
+  ]);
+
+  const complexes = new Map();
+  for (const s of stationsData.stations) {
+    if (!Number.isFinite(s.lat) || !Number.isFinite(s.lon)) continue;
+    const c = complexes.get(s.complex) || { id: s.complex, names: [], routes: new Set(), borough: s.borough, points: [] };
+    c.names.push(s.name);
+    s.routes.forEach((r) => c.routes.add(r));
+    c.points.push([s.lat, s.lon]);
+    complexes.set(s.complex, c);
+  }
+  const stations = [...complexes.values()].map((c) => {
+    // A complex is named after its most common platform name (e.g. "Times Sq-42 St").
+    const counts = new Map();
+    c.names.forEach((n) => counts.set(n, (counts.get(n) || 0) + 1));
+    const name = [...counts].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0][0];
+    const routes = [...c.routes].sort((a, b) => ROUTE_ORDER.indexOf(a) - ROUTE_ORDER.indexOf(b));
+    const lat = c.points.reduce((s, p) => s + p[0], 0) / c.points.length;
+    const lon = c.points.reduce((s, p) => s + p[1], 0) / c.points.length;
+    return [c.id, name, routes, c.borough, hoodAt([lat, lon]), c.points.flat()];
+  });
+  return { version: 1, landmarks, stations };
+}

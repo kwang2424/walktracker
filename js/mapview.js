@@ -7,6 +7,7 @@ const STYLE = 'mapbox://styles/mapbox/standard';
 const STATE = { none: 0, partial: 1, walked: 2 };
 const LIVE_EVERY_MS = 2000; // redraw the live walk line at most this often
 export const BLOCKS_MIN_ZOOM = 13; // below this, neighborhoods are shown shaded instead of blocks
+export const PLACE_COLORS = { landmark: '#ca8a04', station: '#7c3aed' };
 
 const ll = (p) => [p[1], p[0]];
 const collection = (features) => ({ type: 'FeatureCollection', features });
@@ -20,14 +21,14 @@ function basemapConfig({ theme, dark }) {
     lightPreset: dark ? 'night' : 'day',
     show3dObjects: false,
     showPointOfInterestLabels: full,
-    showTransitLabels: full,
+    showTransitLabels: true, // subway stations, in every look
     showLandmarkIcons: false,
     showPedestrianRoads: full,
   };
 }
 
 export class MapView {
-  constructor(container, { token, theme = 'faded', dark = false, colors, onBlockClick, onHoodClick, onUserMove, onMoveEnd, onAuthError } = {}) {
+  constructor(container, { token, theme = 'faded', dark = false, colors, onBlockClick, onHoodClick, onPlaceClick, onUserMove, onMoveEnd, onAuthError } = {}) {
     this.colors = colors;
     this.look = { theme, dark };
     this.idxOf = new Map(); // block id -> numeric feature id
@@ -41,6 +42,8 @@ export class MapView {
     this.hoodsData = collection([]);
     this.hoodStates = new Map(); // feature id -> fraction walked
     this.hoodLit = null;
+    this.placesData = collection([]);
+    this.placeVisited = new Map(); // place index -> true
     this.popup = null;
     this.me = null;
 
@@ -65,11 +68,21 @@ export class MapView {
     this.map.on('style.load', () => { this.styleLoaded = true; this._addLayers(); });
     this.map.on('dragstart', () => onUserMove?.());
     this.map.on('moveend', () => onMoveEnd?.());
-    // Zoomed out, tapping a neighborhood zooms into it. Zoomed in, taps go to blocks.
-    this.map.on('click', 'hoods-fill', (e) => {
-      if (this.map.getZoom() >= BLOCKS_MIN_ZOOM) return;
-      const f = e.features?.[0];
-      if (f && onHoodClick) onHoodClick(f.id);
+    // One tap handler, in priority order: a landmark or station dot, then (zoomed
+    // out) the neighborhood, then (zoomed in) the block.
+    this.map.on('click', (e) => {
+      if (!this._ready()) return;
+      const pad = 10; // finger-sized
+      const box = [[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]];
+      const place = this.map.queryRenderedFeatures(box, { layers: ['places'] })[0];
+      if (place) return onPlaceClick?.(place.id);
+      if (this.map.getZoom() < BLOCKS_MIN_ZOOM) {
+        const hood = this.map.queryRenderedFeatures(e.point, { layers: ['hoods-fill'] })[0];
+        if (hood) return onHoodClick?.(hood.id);
+        return;
+      }
+      const block = this.map.queryRenderedFeatures(e.point, { layers: ['blocks-hit'] })[0];
+      if (block) onBlockClick?.(this.idOf[block.id], [e.lngLat.lat, e.lngLat.lng]);
     });
     // Only a refused token that stops the map loading at all counts as a token
     // problem. A single refused tile later on shouldn't send you back to setup.
@@ -79,12 +92,10 @@ export class MapView {
       if (this.styleLoaded) console.warn('Mapbox refused a request', status, e?.error?.url || '');
       else onAuthError?.(status);
     });
-    this.map.on('click', 'blocks-hit', (e) => {
-      const f = e.features?.[0];
-      if (f && onBlockClick) onBlockClick(this.idOf[f.id], [e.lngLat.lat, e.lngLat.lng]);
-    });
-    this.map.on('mouseenter', 'blocks-hit', () => { this.map.getCanvas().style.cursor = 'pointer'; });
-    this.map.on('mouseleave', 'blocks-hit', () => { this.map.getCanvas().style.cursor = ''; });
+    for (const layer of ['blocks-hit', 'places']) {
+      this.map.on('mouseenter', layer, () => { this.map.getCanvas().style.cursor = 'pointer'; });
+      this.map.on('mouseleave', layer, () => { this.map.getCanvas().style.cursor = ''; });
+    }
   }
 
   // Mapbox Standard (and styles built on it) offer "slots" for custom layers.
@@ -164,7 +175,36 @@ export class MapView {
       id: 'blocks-hit', type: 'line', source: 'blocks', layout: round, minzoom: BLOCKS_MIN_ZOOM,
       paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 22 },
     });
+    // Landmarks (gold) and subway stations (purple): hollow until visited.
+    m.addSource('places', { type: 'geojson', data: this.placesData });
+    const visited = ['boolean', ['feature-state', 'v'], false];
+    const isStation = ['==', ['get', 'kind'], 'station'];
+    add({
+      id: 'places', type: 'circle', source: 'places', minzoom: 12.5,
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 12.5, 2.5, 15, 5, 18, 8],
+        'circle-color': ['case', visited, ['case', isStation, PLACE_COLORS.station, PLACE_COLORS.landmark], '#ffffff'],
+        'circle-stroke-color': ['case', isStation, PLACE_COLORS.station, PLACE_COLORS.landmark],
+        'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 12.5, 1, 16, 2],
+        'circle-emissive-strength': 1,
+      },
+    });
     this._applyAllStates();
+  }
+
+  // Landmarks and stations: [{ index, kind, lat, lon }].
+  setPlaces(items) {
+    this.placesData = collection(items.map((p) => ({
+      type: 'Feature', id: p.index, properties: { kind: p.kind }, geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+    })));
+    this.map.getSource('places')?.setData(this.placesData);
+    this._applyAllStates();
+  }
+
+  setPlaceVisited(index, on = true) {
+    if (this.placeVisited.get(index) === on) return;
+    this.placeVisited.set(index, on);
+    if (this._ready()) this.map.setFeatureState({ source: 'places', id: index }, { v: on });
   }
 
   _ready() {
@@ -177,6 +217,7 @@ export class MapView {
     for (const i of this.highlighted) this.map.setFeatureState({ source: 'blocks', id: i }, { hl: true });
     for (const [i, pct] of this.hoodStates) this.map.setFeatureState({ source: 'hoods', id: i }, { pct });
     if (this.hoodLit != null) this.map.setFeatureState({ source: 'hoods', id: this.hoodLit }, { hl: true });
+    for (const [i, v] of this.placeVisited) this.map.setFeatureState({ source: 'places', id: i }, { v });
   }
 
   // Neighborhood outlines (GeoJSON with numeric feature ids).

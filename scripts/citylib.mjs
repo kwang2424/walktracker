@@ -1,7 +1,7 @@
 // Helpers for build_city.mjs: neighborhood geometry and packing blocks into
 // per-neighborhood files. Uses the app's own block splitting from js/geo.js so
 // blocks are cut the same way everywhere.
-import { buildBlocks, midpoint, polylineLength, pointInMultiPolygon } from '../js/geo.js';
+import { buildBlocks, makeProjector, midpoint, pointSegDist, polylineLength, pointInMultiPolygon, sampleAlong } from '../js/geo.js';
 
 export { pointInMultiPolygon };
 
@@ -41,6 +41,60 @@ export function simplifyRing(ring, tol) {
 
 const round = (x, d) => Math.round(x * 10 ** d) / 10 ** d;
 
+// Paths that mostly run right beside a street (sidewalks nobody tagged as
+// sidewalks, paths along building fronts) add nothing: walking them already
+// counts for the street. Returns a test for a path's coordinates.
+const ALONGSIDE = 15; // meters from a street's centerline
+const ALONGSIDE_SHARE = 0.6; // share of a path's length that close to streets
+export function alongStreets(streetBlocks) {
+  const project = makeProjector(40.7);
+  const cell = 60;
+  const grid = new Map();
+  for (const b of streetBlocks) {
+    const pts = b.coords.map(project);
+    for (let i = 1; i < pts.length; i++) {
+      const [a, c] = [pts[i - 1], pts[i]];
+      const x0 = Math.floor((Math.min(a[0], c[0]) - ALONGSIDE) / cell), x1 = Math.floor((Math.max(a[0], c[0]) + ALONGSIDE) / cell);
+      const y0 = Math.floor((Math.min(a[1], c[1]) - ALONGSIDE) / cell), y1 = Math.floor((Math.max(a[1], c[1]) + ALONGSIDE) / cell);
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+        const key = x * 100003 + y;
+        let list = grid.get(key);
+        if (!list) grid.set(key, (list = []));
+        list.push(a, c);
+      }
+    }
+  }
+  return (coords) => {
+    const samples = sampleAlong(coords, 10).map(project);
+    let near = 0;
+    for (const p of samples) {
+      const list = grid.get(Math.floor(p[0] / cell) * 100003 + Math.floor(p[1] / cell)) || [];
+      for (let i = 0; i < list.length; i += 2) {
+        if (pointSegDist(p, list[i], list[i + 1]) <= ALONGSIDE) { near++; break; }
+      }
+    }
+    return near >= ALONGSIDE_SHARE * samples.length;
+  };
+}
+
+// Footpaths, trails, greenways and named plazas, cut into pieces like blocks.
+export function buildPaths(raw, streetBlocks) {
+  if (!raw.paths?.length) return [];
+  const elements = [];
+  const used = new Set();
+  for (const [, nodes, name, kind] of raw.paths) {
+    if (kind === 'plaza' && !name) continue; // unnamed ones are mostly wide sidewalks
+    for (const id of nodes) used.add(id);
+  }
+  for (const [id, lat, lon] of raw.nodes) if (used.has(id)) elements.push({ type: 'node', id, lat, lon });
+  for (const [id, nodes, name, kind] of raw.paths) {
+    if (kind === 'plaza' && !name) continue;
+    elements.push({ type: 'way', id, nodes, tags: { name, highway: kind } });
+  }
+  const beside = alongStreets(streetBlocks);
+  return buildBlocks({ elements }, { minLength: 20 }).filter((p) => p.highway === 'plaza' || !beside(p.coords));
+}
+
 // raw: { nodes: [[id, lat, lon]], ways: [[id, [ids], name, highway]] } from extract_streets.py
 // hoodsGeo: the NTA GeoJSON from scripts/data
 export function buildCity(raw, hoodsGeo, { outlineTolerance = 0.0001 } = {}) {
@@ -48,30 +102,37 @@ export function buildCity(raw, hoodsGeo, { outlineTolerance = 0.0001 } = {}) {
   for (const [id, lat, lon] of raw.nodes) elements.push({ type: 'node', id, lat, lon });
   for (const [id, nodes, name, highway] of raw.ways) elements.push({ type: 'way', id, nodes, tags: { name, highway } });
   const blocks = buildBlocks({ elements });
+  const paths = buildPaths(raw, blocks);
 
   const hoods = hoodsGeo.features.map((f) => ({
     ...f.properties,
     multi: f.geometry.coordinates,
     bbox: bboxOf(f.geometry.coordinates),
     blocks: [],
+    paths: [],
   }));
-
-  let outside = 0;
-  for (const b of blocks) {
-    const mid = midpoint(b.coords);
-    const hood = hoods.find((h) => {
+  const hoodAt = (coords) => {
+    const mid = midpoint(coords);
+    return hoods.find((h) => {
       const [s, w, n, e] = h.bbox;
       return mid[0] >= s && mid[0] <= n && mid[1] >= w && mid[1] <= e && pointInMultiPolygon(mid, h.multi);
     });
+  };
+
+  let outside = 0;
+  for (const b of blocks) {
+    const hood = hoodAt(b.coords);
     if (hood) hood.blocks.push(b);
     else outside++; // New Jersey, Westchester, water
   }
+  for (const p of paths) hoodAt(p.coords)?.paths.push(p);
 
+  // Paths only count where there are streets (not Rikers or Hart Island).
   const used = hoods.filter((h) => h.blocks.length);
   // Blocks are filed by their midpoint, so edge blocks can stick out past the
   // outline. Grow each box to cover its blocks completely.
   for (const h of used) {
-    for (const b of h.blocks) for (const [la, lo] of b.coords) {
+    for (const b of [...h.blocks, ...h.paths]) for (const [la, lo] of b.coords) {
       h.bbox = [Math.min(h.bbox[0], la), Math.min(h.bbox[1], lo), Math.max(h.bbox[2], la), Math.max(h.bbox[3], lo)];
     }
   }
@@ -94,7 +155,16 @@ export function buildCity(raw, hoodsGeo, { outlineTolerance = 0.0001 } = {}) {
       }
       return [b.id, ni, b.coords.flatMap(([la, lo]) => [round(la, 6), round(lo, 6)])];
     });
-    files[h.id] = { id: h.id, names, blocks: packed };
+    // Paths: [id, name index, flat coords, 1 if a plaza]. Not in street counts.
+    const pathsPacked = h.paths.map((p) => {
+      let ni = -1;
+      if (p.name) {
+        if (!nameIdx.has(p.name)) { nameIdx.set(p.name, names.length); names.push(p.name); }
+        ni = nameIdx.get(p.name);
+      }
+      return [p.id, ni, p.coords.flatMap(([la, lo]) => [round(la, 6), round(lo, 6)]), p.highway === 'plaza' ? 1 : 0];
+    });
+    files[h.id] = { id: h.id, names, blocks: packed, paths: pathsPacked };
   });
 
   const index = {
@@ -104,6 +174,8 @@ export function buildCity(raw, hoodsGeo, { outlineTolerance = 0.0001 } = {}) {
     total: {
       blocks: used.reduce((n, h) => n + h.blocks.length, 0),
       length: Math.round(used.reduce((n, h) => n + h.blocks.reduce((m, b) => m + b.length, 0), 0)),
+      paths: used.reduce((n, h) => n + h.paths.length, 0),
+      pathLength: Math.round(used.reduce((n, h) => n + h.paths.reduce((m, b) => m + b.length, 0), 0)),
     },
     hoods: used.map((h) => ({
       id: h.id,
@@ -113,6 +185,8 @@ export function buildCity(raw, hoodsGeo, { outlineTolerance = 0.0001 } = {}) {
       bbox: h.bbox.map((x) => round(x, 5)),
       blocks: h.blocks.length,
       length: Math.round(h.blocks.reduce((m, b) => m + b.length, 0)),
+      paths: h.paths.length,
+      pathLength: Math.round(h.paths.reduce((m, b) => m + b.length, 0)),
     })),
   };
 
@@ -135,7 +209,7 @@ export function buildCity(raw, hoodsGeo, { outlineTolerance = 0.0001 } = {}) {
     .map((s) => [s.name, s.borough, s.blocks, Math.round(s.length), [...s.hoods]])
     .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
 
-  return { index, files, outlines, streets: streetList, outside, totalBlocks: blocks.length, hoods: used };
+  return { index, files, outlines, streets: streetList, outside, totalBlocks: blocks.length, totalPaths: paths.length, hoods: used };
 }
 
 export { polylineLength };

@@ -7,7 +7,9 @@ OSM_DIR holds <region name>.osm.pbf for each region in regions.json (see
 download_extracts.py). Only streets touching a region's bounding box are
 kept. The output is one JSON file read by build_city.mjs:
 
-    {"nodes": [[id, lat, lon], ...], "ways": [[id, [node ids], name, highway], ...]}
+    {"nodes": [[id, lat, lon], ...],
+     "ways": [[id, [node ids], name, highway], ...],    streets (blocks)
+     "paths": [[id, [node ids], name, kind], ...]}     park paths, trails, plazas
 """
 import json
 import os
@@ -66,10 +68,40 @@ def walkable(tags):
     return True
 
 
+# Paths are tracked apart from streets (they don't change street progress).
+NOT_A_PATH = {'sidewalk', 'crossing', 'traffic_island', 'access_aisle'}
+OPEN_TO_FEET = ('yes', 'designated', 'permissive')
+
+
+def path_kind(tags):
+    """'path' for footpaths, trails, promenades and greenways, 'plaza' for
+    pedestrian squares (an outline), or None."""
+    highway = tags.get('highway')
+    foot = tags.get('foot')
+    if foot in ('no', 'private') or tags.get('indoor') == 'yes':
+        return None
+    if tags.get('access') in ('private', 'no') and foot not in OPEN_TO_FEET:
+        return None
+    if highway == 'pedestrian' and tags.get('area') == 'yes':
+        return 'plaza'
+    if tags.get('area') == 'yes':
+        return None
+    # Sidewalks and crosswalks belong to their street.
+    if highway == 'footway' and tags.get('footway') not in NOT_A_PATH:
+        return 'path'
+    if highway == 'path' and tags.get('footway') not in NOT_A_PATH:
+        return 'path'
+    # Greenways mapped as bike paths that are also for walking.
+    if highway in ('cycleway', 'track') and foot in OPEN_TO_FEET and tags.get('footway') not in NOT_A_PATH:
+        return 'path'
+    return None
+
+
 class Reader(osmium.SimpleHandler):
     def __init__(self):
         super().__init__()
         self.ways = {}  # id -> ([node ids], name, highway)
+        self.paths = {}  # id -> ([node ids], name, kind)
         self.nodes = {}  # id -> (lat, lon)
         self.bbox = None  # [south, west, north, east] of the region being read
 
@@ -78,14 +110,23 @@ class Reader(osmium.SimpleHandler):
         return s <= lat <= n and w <= lon <= e
 
     def way(self, w):
-        if w.id in self.ways or 'highway' not in w.tags or not walkable(dict(w.tags)):
+        if w.id in self.ways or w.id in self.paths or 'highway' not in w.tags:
+            return
+        tags = dict(w.tags)
+        street = walkable(tags)
+        kind = None if street else path_kind(tags)
+        if not street and not kind:
             return
         pts = [(n.ref, n.location.lat, n.location.lon) for n in w.nodes if n.location.valid()]
         if len(pts) < 2 or not any(self.inside(lat, lon) for _, lat, lon in pts):
             return
         for ref, lat, lon in pts:
             self.nodes[ref] = (round(lat, 6), round(lon, 6))
-        self.ways[w.id] = ([ref for ref, _, _ in pts], w.tags.get('name', ''), w.tags['highway'])
+        ids = [ref for ref, _, _ in pts]
+        if kind:
+            self.paths[w.id] = (ids, tags.get('name', ''), kind)
+        else:
+            self.ways[w.id] = (ids, tags.get('name', ''), tags['highway'])
 
 
 def main(out_path, regions_path, osm_dir):
@@ -102,10 +143,11 @@ def main(out_path, regions_path, osm_dir):
     out = {
         'nodes': [[i, lat, lon] for i, (lat, lon) in reader.nodes.items()],
         'ways': [[i, ids, name, hw] for i, (ids, name, hw) in reader.ways.items()],
+        'paths': [[i, ids, name, kind] for i, (ids, name, kind) in reader.paths.items()],
     }
     with open(out_path, 'w') as f:
         json.dump(out, f, separators=(',', ':'))
-    print(f'{len(reader.ways)} streets, {len(reader.nodes)} points')
+    print(f'{len(reader.ways)} streets, {len(reader.paths)} paths, {len(reader.nodes)} points')
 
 
 if __name__ == '__main__':

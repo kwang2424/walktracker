@@ -133,33 +133,40 @@ test('the street types in the extract script match the app', () => {
   assert.deepEqual(fromPy, [...WALKABLE_HIGHWAYS].sort());
 });
 
-test('the extract script keeps the streets people can walk along', (t) => {
+test('the extract script keeps streets people walk along, and paths apart', (t) => {
   const cases = [
     // [tags, kept?]
     [{ highway: 'residential' }, true],
-    [{ highway: 'residential', access: 'private' }, false],
+    [{ highway: 'residential', access: 'private' }, null],
     [{ highway: 'tertiary', access: 'no', bus: 'yes', foot: 'yes' }, true], // Fulton Mall
-    [{ highway: 'primary', foot: 'no' }, false], // a roadway you can't walk along
+    [{ highway: 'primary', foot: 'no' }, null], // a roadway you can't walk along
     [{ highway: 'primary', foot: 'no', 'sidewalk:both': 'separate' }, true], // Grand Concourse
     [{ highway: 'trunk' }, true], // Linden Boulevard
     [{ highway: 'trunk', foot: 'use_sidepath' }, true], // West Street
-    [{ highway: 'trunk', sidewalk: 'no' }, false],
-    [{ highway: 'trunk', motorroad: 'yes' }, false],
-    [{ highway: 'trunk', foot: 'no' }, false], // Queensboro Bridge roadway
-    [{ highway: 'motorway' }, false],
-    [{ highway: 'pedestrian', area: 'yes' }, false], // a plaza
+    [{ highway: 'trunk', sidewalk: 'no' }, null],
+    [{ highway: 'trunk', motorroad: 'yes' }, null],
+    [{ highway: 'trunk', foot: 'no' }, null], // Queensboro Bridge roadway
+    [{ highway: 'motorway' }, null],
+    [{ highway: 'pedestrian', area: 'yes' }, 'plaza'], // kept as a path (outline), not a street
     [{ highway: 'service', service: 'alley', name: 'Cortlandt Alley' }, true],
-    [{ highway: 'service', service: 'alley' }, false],
-    [{ highway: 'service', name: 'Ring Road' }, false],
-    [{ highway: 'service', service: 'driveway' }, false],
-    [{ highway: 'footway', name: 'High Line' }, false],
+    [{ highway: 'service', service: 'alley' }, null],
+    [{ highway: 'service', name: 'Ring Road' }, null],
+    [{ highway: 'service', service: 'driveway' }, null],
+    [{ highway: 'footway', name: 'High Line' }, 'path'], // paths: tracked apart from streets
+    [{ highway: 'path' }, 'path'],
+    [{ highway: 'cycleway', foot: 'designated', name: 'Hudson River Greenway' }, 'path'],
+    [{ highway: 'cycleway' }, null],
+    [{ highway: 'footway', footway: 'sidewalk' }, null], // belongs to its street
+    [{ highway: 'footway', footway: 'crossing' }, null],
+    [{ highway: 'footway', access: 'private' }, null],
+    [{ highway: 'steps' }, null],
   ];
   const script = `
 import json, sys, types
 sys.modules['osmium'] = types.SimpleNamespace(SimpleHandler=object)
 sys.path.insert(0, sys.argv[2])
-from extract_streets import walkable
-print(json.dumps([walkable(t) for t, _ in json.loads(sys.argv[1])]))`;
+from extract_streets import walkable, path_kind
+print(json.dumps([walkable(t) or path_kind(t) for t, _ in json.loads(sys.argv[1])]))`;
   let out;
   try {
     out = execFileSync('python3', ['-c', script, JSON.stringify(cases), fileURLToPath(new URL('../scripts', import.meta.url))], { encoding: 'utf8' });
@@ -169,4 +176,43 @@ print(json.dumps([walkable(t) for t, _ in json.loads(sys.argv[1])]))`;
   }
   const got = JSON.parse(out);
   cases.forEach(([tags, want], i) => assert.equal(got[i], want, JSON.stringify(tags)));
+});
+
+test('paths are kept apart from streets: their own progress, never block counts', async () => {
+  const withPaths = structuredClone(raw);
+  // A park path between the two rows (~55 m from either street), across West.
+  withPaths.nodes.push([500, 40.7305, -73.9995], [501, 40.7305, -73.9915]);
+  // A path hugging Street 0 (an untagged sidewalk): dropped.
+  withPaths.nodes.push([510, 40.73003, -73.9955], [511, 40.73003, -73.9915]);
+  // A named plaza outline and an unnamed one (unnamed plazas are dropped).
+  withPaths.nodes.push([520, 40.7302, -73.9890], [521, 40.7302, -73.9885], [522, 40.7304, -73.9885]);
+  withPaths.paths = [
+    [5000, [500, 501], 'Park Walk', 'path'],
+    [5001, [510, 511], '', 'path'],
+    [5002, [520, 521, 522, 520], 'Test Square', 'plaza'],
+    [5003, [520, 522], '', 'plaza'],
+  ];
+  const built = buildCity(withPaths, hoodsGeo);
+  const west = built.files.W1;
+  assert.deepEqual(west.paths.map((p) => west.names[p[1]]), ['Park Walk']);
+  assert.deepEqual(built.files.E1.paths.map((p) => [built.files.E1.names[p[1]], p[3]]), [['Test Square', 1]]);
+  assert.equal(built.index.total.blocks, buildCity(raw, hoodsGeo).index.total.blocks);
+  assert.ok(built.index.total.pathLength > 600);
+
+  const { fetchImpl } = serve(built);
+  const city = await new City({ fetchImpl }).init();
+  const walk = [];
+  for (let i = 0; i <= 30; i++) walk.push([40.7305, -73.9995 + (0.008 * i) / 30, i * 8000]);
+  await city.ensure(city.setTracks([{ id: 1, startedAt: 0, points: walk }]));
+  const pathId = city.loaded.get('W1').paths[0].id;
+  assert.ok(city.isPath(pathId));
+  assert.equal(city.isWalked(pathId), true);
+  const s = city.summary();
+  // Street numbers are exactly what the same walk gives without any paths.
+  const plain = await new City({ fetchImpl: serve(buildCity(raw, hoodsGeo)).fetchImpl }).init();
+  await plain.ensure(plain.setTracks([{ id: 1, startedAt: 0, points: walk }]));
+  assert.equal(s.walked, plain.summary().walked);
+  assert.equal(city.newByTrack.get(1), plain.newByTrack.get(1));
+  assert.ok(s.pathWalkedLength > 600);
+  assert.equal(s.hoods.find((h) => h.id === 'W1').pathWalkedLength, s.pathWalkedLength);
 });

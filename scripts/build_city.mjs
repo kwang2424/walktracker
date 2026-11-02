@@ -37,5 +37,6 @@ write('places.json', places);
 
 const { total, hoods } = city.index;
 console.log(`${total.blocks} blocks (${(total.length / 1000).toFixed(0)} km) in ${hoods.length} neighborhoods; ` +
+  `${total.paths} path pieces (${(total.pathLength / 1000).toFixed(0)} km); ` +
   `${city.outside} blocks outside NYC skipped; ${city.streets.length} streets; ` +
   `${places.landmarks.length} landmarks, ${places.stations.length} stations`);

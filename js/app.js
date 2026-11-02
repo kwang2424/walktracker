@@ -150,7 +150,7 @@ function blockState(id) {
 }
 
 function drawBlocks() {
-  const blocks = city.loadedBlocks();
+  const blocks = [...city.loadedBlocks(), ...city.loadedPaths()];
   view.setBlocks(blocks);
   for (const b of blocks) view.setBlockState(b.id, blockState(b.id));
 }
@@ -229,8 +229,11 @@ function openBlockPopup(id, latlng) {
       <button data-act="toggle">${done ? 'Mark not walked' : 'Mark walked'}</button>
       ${manual ? '<button data-act="reset">Use GPS</button>' : ''}
     </div>`;
-  el.querySelector('.pop-title').textContent = block.name || 'Unnamed street';
-  el.querySelector('.pop-sub').textContent = [crossStreets(block), city.hoods.get(block.hood)?.name, `${Math.round(block.length)} m`].filter(Boolean).join(' · ');
+  el.querySelector('.pop-title').textContent = block.name || (block.plaza ? 'Plaza' : block.path ? 'Path' : 'Unnamed street');
+  el.querySelector('.pop-sub').textContent = [
+    block.path ? 'Not counted in blocks' : crossStreets(block),
+    city.hoods.get(block.hood)?.name, `${Math.round(block.length)} m`,
+  ].filter(Boolean).join(' · ');
   el.querySelector('.pop-status').textContent =
     (done ? 'Walked' : f > 0 ? `${Math.round(f * 100)}% walked` : 'Not walked yet') + (manual ? ' · set by you' : '');
   el.addEventListener('click', async (e) => {
@@ -424,7 +427,8 @@ function hudTarget() {
     const b = s.boroughs.find((x) => x.name === h.borough);
     return { kind: 'borough', ...b, name: b.name };
   }
-  return { kind: 'city', name: 'New York City', blocks: s.blocks, length: s.length, walked: s.walked, walkedLength: s.walkedLength };
+  return { kind: 'city', name: 'New York City', blocks: s.blocks, length: s.length, walked: s.walked, walkedLength: s.walkedLength,
+    pathLength: s.pathLength, pathWalkedLength: s.pathWalkedLength };
 }
 
 let hudShown = null;
@@ -438,6 +442,9 @@ function renderHud() {
   $('#stat-blocks').textContent = t.walked.toLocaleString();
   $('#stat-total').textContent = t.blocks.toLocaleString();
   $('#stat-dist').textContent = `${km(t.walkedLength)} of ${km(t.length)} walked`;
+  // Park paths and plazas, kept apart from the street count.
+  $('#chip-paths').hidden = !t.pathLength;
+  $('#chip-paths').textContent = `Paths · ${km(t.pathWalkedLength || 0)} of ${km(t.pathLength || 0)}`;
   document.querySelectorAll('#hud-scope button').forEach((b) => b.setAttribute('aria-checked', b.dataset.scope === settings.hudScope));
 }
 
@@ -575,6 +582,7 @@ function onPosition(pos) {
     const changed = city.addLiveSegment(last, p);
     if (changed.size) {
       for (const id of changed) {
+        if (city.isPath(id)) continue; // paths don't count as new blocks
         if (!rec.newBlocks.has(id) && city.isWalked(id)) {
           rec.newBlocks.add(id);
           if (!city.completedAt.has(id)) city.completedAt.set(id, rec.track.startedAt);
@@ -1191,6 +1199,7 @@ function renderStatsView() {
     tile('Blocks walked', s.walked.toLocaleString(), `${fmtPct(cityPct)} of NYC`),
     tile('Neighborhoods', `${visited} visited`, `${finished} finished`),
     tile('Longest walk', km(t.longest), ''),
+    tile('Paths & plazas', km(s.pathWalkedLength || 0), `of ${km(s.pathLength || 0)} in NYC parks and plazas`),
     tile('Best streak', `${bestStreak(tracks)} day${bestStreak(tracks) === 1 ? '' : 's'}`, `Current: ${streak(tracks)}`),
     tile('This week', km(weekStats(tracks, city.completedAt).meters), `${weekStats(tracks, city.completedAt).blocks} new blocks`),
   );
@@ -1359,7 +1368,8 @@ function renderHoods() {
       shown++;
       list.append(row({
         title: h.name,
-        sub: `${q ? `${h.borough} · ` : ''}${h.walked.toLocaleString()} of ${h.blocks.toLocaleString()} blocks · ${km(h.length)}`,
+        sub: `${q ? `${h.borough} · ` : ''}${h.walked.toLocaleString()} of ${h.blocks.toLocaleString()} blocks · ${km(h.length)}`
+          + (h.pathWalkedLength ? ` · ${km(h.pathWalkedLength)} of paths` : ''),
         frac: frac(h),
         pct: frac(h) * 100,
         onOpen: () => openHood(h.id),

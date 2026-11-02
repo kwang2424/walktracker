@@ -33,6 +33,7 @@ export class City {
     this.loaded = new Map(); // hood id -> { meta, blocks, engine }
     this.pending = new Map(); // hood id -> Promise
     this.blockHood = new Map(); // block id -> hood id (loaded hoods only)
+    this.pathHood = new Map(); // path id -> hood id
     this.tracks = [];
     this.live = null; // points of the walk being recorded
     this.completedAt = new Map();
@@ -64,13 +65,18 @@ export class City {
       if (!res.ok) throw new Error(`neighborhood ${id}: HTTP ${res.status}`);
       const file = await res.json();
       const meta = this.hoods.get(id);
-      const blocks = file.blocks.map(([bid, ni, flat]) => {
+      const unpack = ([bid, ni, flat, plaza]) => {
         const coords = [];
         for (let i = 0; i < flat.length; i += 2) coords.push([flat[i], flat[i + 1]]);
-        return { id: bid, name: ni >= 0 ? file.names[ni] : '', borough: meta.borough, hood: id, coords, length: polylineLength(coords) };
-      });
-      const entry = { meta, blocks, engine: new CoverageEngine(this.engineOpts) };
+        return { id: bid, name: ni >= 0 ? file.names[ni] : '', borough: meta.borough, hood: id, coords, length: polylineLength(coords), ...(plaza != null && { path: true, plaza: !!plaza }) };
+      };
+      const blocks = file.blocks.map(unpack);
+      // Park paths, trails and plazas: tracked like blocks, but in their own
+      // engine so they never change street counts, new-block tallies or awards.
+      const paths = (file.paths || []).map(unpack);
+      const entry = { meta, blocks, paths, engine: new CoverageEngine(this.engineOpts), pathEngine: new CoverageEngine(this.engineOpts) };
       for (const b of blocks) this.blockHood.set(b.id, id);
+      for (const p of paths) this.pathHood.set(p.id, id);
       this._replay(entry);
       this.loaded.set(id, entry);
       this.pending.delete(id);
@@ -89,7 +95,12 @@ export class City {
     const { completedAt, newByTrack } = replayTracks(entry.engine, near);
     for (const [bid, time] of completedAt) this.completedAt.set(bid, time);
     for (const [tid, n] of newByTrack) this.newByTrack.set(tid, (this.newByTrack.get(tid) || 0) + n);
-    if (this.live?.length) entry.engine.addTrack(this.live);
+    entry.pathEngine.setBlocks(entry.paths);
+    for (const t of near) entry.pathEngine.addTrack(t.points);
+    if (this.live?.length) {
+      entry.engine.addTrack(this.live);
+      entry.pathEngine.addTrack(this.live);
+    }
   }
 
   // Replace the list of saved walks: recomputes every loaded neighborhood and
@@ -121,38 +132,51 @@ export class City {
     const changed = new Set();
     for (const id of this.hoodsIn(box, PAD)) {
       const entry = this.loaded.get(id);
-      if (entry) entry.engine.addSegment(a, b, changed);
-      else this._load(id).catch(() => {});
+      if (entry) {
+        entry.engine.addSegment(a, b, changed);
+        entry.pathEngine.addSegment(a, b, changed);
+      } else this._load(id).catch(() => {});
     }
     return changed;
   }
 
+  // The coverage engine that holds a block or path id.
+  _engine(id) {
+    let hood = this.blockHood.get(id);
+    if (hood) return this.loaded.get(hood).engine;
+    hood = this.pathHood.get(id);
+    return hood ? this.loaded.get(hood).pathEngine : null;
+  }
+
+  isPath(id) {
+    return this.pathHood.has(id);
+  }
+
   block(id) {
-    const hood = this.blockHood.get(id);
-    return hood ? this.loaded.get(hood).engine.blocks.get(id)?.block : undefined;
+    return this._engine(id)?.blocks.get(id)?.block;
   }
 
   fraction(id) {
-    const hood = this.blockHood.get(id);
-    return hood ? this.loaded.get(hood).engine.fraction(id) : 0;
+    return this._engine(id)?.fraction(id) ?? 0;
   }
 
   isWalked(id, overrides = {}) {
     if (id in overrides) return overrideWalked(overrides[id]);
-    const hood = this.blockHood.get(id);
-    return hood ? this.loaded.get(hood).engine.isWalked(id) : false;
+    return this._engine(id)?.isWalked(id) ?? false;
   }
 
   // Progress for one neighborhood. Unloaded ones have nothing walked yet.
   hoodProgress(id, overrides = {}) {
     const meta = this.hoods.get(id);
     const entry = this.loaded.get(id);
-    if (!entry) return { blocks: meta.blocks, length: meta.length, walked: 0, walkedLength: 0 };
-    let walked = 0, walkedLength = 0;
+    const pathLength = meta.pathLength || 0;
+    if (!entry) return { blocks: meta.blocks, length: meta.length, walked: 0, walkedLength: 0, pathLength, pathWalkedLength: 0 };
+    let walked = 0, walkedLength = 0, pathWalkedLength = 0;
     for (const b of entry.blocks) {
       if (this.isWalked(b.id, overrides)) { walked++; walkedLength += b.length; }
     }
-    return { blocks: meta.blocks, length: meta.length, walked, walkedLength };
+    for (const p of entry.paths) if (this.isWalked(p.id, overrides)) pathWalkedLength += p.length;
+    return { blocks: meta.blocks, length: meta.length, walked, walkedLength, pathLength, pathWalkedLength };
   }
 
   // NYC-wide, per-borough and per-neighborhood progress.
@@ -160,8 +184,9 @@ export class City {
     const hoods = this.index.hoods.map((h) => ({ ...h, ...this.hoodProgress(h.id, overrides) }));
     const boroughs = new Map();
     for (const h of hoods) {
-      const b = boroughs.get(h.borough) || { name: h.borough, blocks: 0, length: 0, walked: 0, walkedLength: 0 };
+      const b = boroughs.get(h.borough) || { name: h.borough, blocks: 0, length: 0, walked: 0, walkedLength: 0, pathLength: 0, pathWalkedLength: 0 };
       b.blocks += h.blocks; b.length += h.length; b.walked += h.walked; b.walkedLength += h.walkedLength;
+      b.pathLength += h.pathLength; b.pathWalkedLength += h.pathWalkedLength;
       boroughs.set(h.borough, b);
     }
     const sum = (k) => hoods.reduce((n, h) => n + h[k], 0);
@@ -170,6 +195,8 @@ export class City {
       length: this.index.total.length,
       walked: sum('walked'),
       walkedLength: sum('walkedLength'),
+      pathLength: this.index.total.pathLength || 0,
+      pathWalkedLength: sum('pathWalkedLength'),
       hoods,
       boroughs: [...boroughs.values()],
     };
@@ -194,5 +221,10 @@ export class City {
   // All blocks of loaded neighborhoods, for drawing.
   loadedBlocks() {
     return [...this.loaded.values()].flatMap((e) => e.blocks);
+  }
+
+  // All park paths, trails and plazas of loaded neighborhoods.
+  loadedPaths() {
+    return [...this.loaded.values()].flatMap((e) => e.paths);
   }
 }

@@ -7,6 +7,7 @@ const STYLE = 'mapbox://styles/mapbox/standard';
 const STATE = { none: 0, partial: 1, walked: 2 };
 const LIVE_EVERY_MS = 2000; // redraw the live walk line at most this often
 export const BLOCKS_MIN_ZOOM = 13; // below this, neighborhoods are shown shaded instead of blocks
+export const PATHS_MIN_ZOOM = 14.5; // park paths are dense; show them a bit closer in
 export const PLACE_COLORS = { landmark: '#ca8a04', station: '#7c3aed' };
 
 const ll = (p) => [p[1], p[0]];
@@ -81,7 +82,9 @@ export class MapView {
         if (hood) return onHoodClick?.(hood.id);
         return;
       }
-      const block = this.map.queryRenderedFeatures(e.point, { layers: ['blocks-hit'] })[0];
+      // Streets win over paths when both are under the finger.
+      const hits = this.map.queryRenderedFeatures(e.point, { layers: ['blocks-hit'] });
+      const block = hits.find((f) => !f.properties.p) || (this.map.getZoom() >= PATHS_MIN_ZOOM - 0.5 ? hits[0] : undefined);
       if (block) onBlockClick?.(this.idOf[block.id], [e.lngLat.lat, e.lngLat.lng]);
     });
     // Only a refused token that stops the map loading at all counts as a token
@@ -158,8 +161,23 @@ export class MapView {
     const s = ['coalesce', ['feature-state', 's'], 0];
     const hl = ['boolean', ['feature-state', 'hl'], false];
     const width = (none, partial, walked, lit) => ['case', hl, lit, ['match', s, 2, walked, 1, partial, none]];
+    const isPath = ['==', ['get', 'p'], 1];
+    // Park paths, trails and plazas: dotted, shown once zoomed in a little more.
     add({
-      id: 'blocks', type: 'line', source: 'blocks', layout: round, minzoom: BLOCKS_MIN_ZOOM - 0.5,
+      id: 'paths', type: 'line', source: 'blocks', layout: round, minzoom: PATHS_MIN_ZOOM - 0.5, filter: isPath,
+      paint: {
+        'line-color': ['match', s, 2, c.walked, 1, c.partial, c.unwalked],
+        'line-opacity': ['match', s, 2, 1, 1, 0.95, 0.75],
+        'line-width': ['interpolate', ['exponential', 1.6], ['zoom'],
+          14, width(1.2, 1.6, 2, 4),
+          16, width(2.2, 3, 3.5, 8),
+          19, width(4, 6, 7, 14)],
+        'line-dasharray': [0.1, 1.8],
+        'line-emissive-strength': 1,
+      },
+    });
+    add({
+      id: 'blocks', type: 'line', source: 'blocks', layout: round, minzoom: BLOCKS_MIN_ZOOM - 0.5, filter: ['!', isPath],
       paint: {
         'line-color': ['match', s, 2, c.walked, 1, c.partial, c.unwalked],
         'line-opacity': ['match', s, 2, 1, 1, 0.95, 0.7],
@@ -254,6 +272,7 @@ export class MapView {
     if (!this._ready()) return;
     const s = ['coalesce', ['feature-state', 's'], 0];
     this.map.setPaintProperty('blocks', 'line-color', ['match', s, 2, colors.walked, 1, colors.partial, colors.unwalked]);
+    this.map.setPaintProperty('paths', 'line-color', ['match', s, 2, colors.walked, 1, colors.partial, colors.unwalked]);
     const pct = ['coalesce', ['feature-state', 'pct'], 0];
     this.map.setPaintProperty('hoods-fill', 'fill-color', ['interpolate', ['linear'], pct, 0, colors.unwalked, 0.0001, '#a7f3d0', 0.2, '#34d399', 1, '#047857']);
     this.map.setPaintProperty('tracks', 'line-color', colors.track);
@@ -269,7 +288,7 @@ export class MapView {
       this.idxOf.set(b.id, i);
       this.idOf.push(b.id);
       this.states.push(0);
-      return { type: 'Feature', id: i, properties: {}, geometry: { type: 'LineString', coordinates: b.coords.map(ll) } };
+      return { type: 'Feature', id: i, properties: b.path ? { p: 1 } : {}, geometry: { type: 'LineString', coordinates: b.coords.map(ll) } };
     });
     this.blocksData = collection(features);
     if (this._ready()) {

@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCity, pointInMultiPolygon, simplifyRing } from '../scripts/citylib.mjs';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { City, overrideWalked } from '../js/city.js';
 import { WALKABLE_HIGHWAYS } from '../js/geo.js';
 
@@ -129,4 +131,42 @@ test('the street types in the extract script match the app', () => {
   const block = py.match(/WALKABLE = \{([\s\S]*?)\}/)[1];
   const fromPy = [...block.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
   assert.deepEqual(fromPy, [...WALKABLE_HIGHWAYS].sort());
+});
+
+test('the extract script keeps the streets people can walk along', (t) => {
+  const cases = [
+    // [tags, kept?]
+    [{ highway: 'residential' }, true],
+    [{ highway: 'residential', access: 'private' }, false],
+    [{ highway: 'tertiary', access: 'no', bus: 'yes', foot: 'yes' }, true], // Fulton Mall
+    [{ highway: 'primary', foot: 'no' }, false], // a roadway you can't walk along
+    [{ highway: 'primary', foot: 'no', 'sidewalk:both': 'separate' }, true], // Grand Concourse
+    [{ highway: 'trunk' }, true], // Linden Boulevard
+    [{ highway: 'trunk', foot: 'use_sidepath' }, true], // West Street
+    [{ highway: 'trunk', sidewalk: 'no' }, false],
+    [{ highway: 'trunk', motorroad: 'yes' }, false],
+    [{ highway: 'trunk', foot: 'no' }, false], // Queensboro Bridge roadway
+    [{ highway: 'motorway' }, false],
+    [{ highway: 'pedestrian', area: 'yes' }, false], // a plaza
+    [{ highway: 'service', service: 'alley', name: 'Cortlandt Alley' }, true],
+    [{ highway: 'service', service: 'alley' }, false],
+    [{ highway: 'service', name: 'Ring Road' }, false],
+    [{ highway: 'service', service: 'driveway' }, false],
+    [{ highway: 'footway', name: 'High Line' }, false],
+  ];
+  const script = `
+import json, sys, types
+sys.modules['osmium'] = types.SimpleNamespace(SimpleHandler=object)
+sys.path.insert(0, sys.argv[2])
+from extract_streets import walkable
+print(json.dumps([walkable(t) for t, _ in json.loads(sys.argv[1])]))`;
+  let out;
+  try {
+    out = execFileSync('python3', ['-c', script, JSON.stringify(cases), fileURLToPath(new URL('../scripts', import.meta.url))], { encoding: 'utf8' });
+  } catch {
+    t.skip('python3 not available');
+    return;
+  }
+  const got = JSON.parse(out);
+  cases.forEach(([tags, want], i) => assert.equal(got[i], want, JSON.stringify(tags)));
 });

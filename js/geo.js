@@ -90,11 +90,14 @@ export function pointInMultiPolygon([lat, lon], multi) {
 
 // --- OpenStreetMap -> blocks -------------------------------------------------
 
-// Streets people walk along. Footpaths, service roads and highways are left
-// out, matching how block-walking apps count "every street".
+// Street types people walk along (scripts/extract_streets.py has the full rules:
+// it also keeps named alleys and drops roadways closed to people on foot).
+// Footpaths, driveways and expressways are left out, matching how
+// block-walking apps count "every street".
 export const WALKABLE_HIGHWAYS = [
   'primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary',
   'tertiary_link', 'residential', 'unclassified', 'living_street', 'pedestrian',
+  'trunk',
 ];
 
 // Split OSM ways at intersections. Each piece between two intersections is a "block".

@@ -1576,3 +1576,9 @@ else toast('The map couldn’t load. Check your connection and reopen the app.',
 
 // Handy for debugging from the browser console.
 window.walktracker = { city, db, rebuild, settings, view, awake, native, get rec() { return rec; } };
+
+// iOS scrolls the whole page up to show the keyboard and sometimes leaves it
+// there after the keyboard closes, which pushes the map and cards off-screen.
+document.addEventListener('focusout', (e) => {
+  if (e.target.matches?.('input, textarea')) setTimeout(() => window.scrollTo(0, 0), 50);
+});

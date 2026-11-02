@@ -33,6 +33,10 @@ final class WebHost: NSObject, ObservableObject {
         webView.backgroundColor = .systemBackground
         webView.scrollView.bounces = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        // The page is a full-screen app: only its own panels scroll, and pinch
+        // zooms the map, not the page.
+        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.pinchGestureRecognizer?.isEnabled = false
         #if DEBUG
         if #available(iOS 16.4, *) { webView.isInspectable = true } // Safari > Develop, for debugging
         #endif
@@ -105,6 +109,10 @@ extension WebHost: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
         download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        webView.scrollView.pinchGestureRecognizer?.isEnabled = false
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {

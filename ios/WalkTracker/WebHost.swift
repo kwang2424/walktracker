@@ -121,6 +121,26 @@ extension WebHost: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.scrollView.pinchGestureRecognizer?.isEnabled = false
         (webView as? FullScreenWebView)?.resetViewport()
+        reportScreen(webView)
+    }
+
+    /// Temporary: tells the page how iOS sized the app, for the on-screen
+    /// size check (see showViewportCheck in app.js).
+    private func reportScreen(_ webView: WKWebView) {
+        let screen = webView.window?.screen ?? UIScreen.main
+        func size(_ s: CGSize) -> String { "\(Int(s.width))×\(Int(s.height))" }
+        let info: [String: String] = [
+            "screen": size(screen.bounds.size),
+            "window": webView.window.map { size($0.bounds.size) } ?? "none",
+            "view": size(webView.bounds.size),
+            "scale": String(format: "%.2f / %.2f", screen.scale, screen.nativeScale),
+            "zoom": String(format: "%.2f", webView.scrollView.zoomScale),
+            "safe": "\(Int(webView.safeAreaInsets.top)) / \(Int(webView.safeAreaInsets.bottom))",
+            "transform": webView.transform.isIdentity ? "none" : "\(webView.transform)",
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: info),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.__nativeScreen = \(json); window.showViewportCheck && window.showViewportCheck()")
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {

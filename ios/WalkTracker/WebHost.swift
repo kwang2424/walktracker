@@ -7,7 +7,7 @@ import WebKit
 /// downloads (backup and GPX exports) through the share sheet.
 @MainActor
 final class WebHost: NSObject, ObservableObject {
-    let webView: WKWebView
+    let webView: FullScreenWebView
     private let location = LocationService.shared
     private var downloadFile: URL?
 
@@ -24,7 +24,9 @@ final class WebHost: NSObject, ObservableObject {
         content.addScriptMessageHandler(NativeCalls(location: location), contentWorld: .page, name: "native")
         config.userContentController = content
 
-        webView = WKWebView(frame: .zero, configuration: config)
+        // Start at screen size: a web view that loads its page at zero size can
+        // get stuck with the wrong page scale (zoomed in and shifted).
+        webView = FullScreenWebView(frame: UIScreen.main.bounds, configuration: config)
         super.init()
 
         webView.navigationDelegate = self
@@ -37,6 +39,11 @@ final class WebHost: NSObject, ObservableObject {
         // zooms the map, not the page.
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.pinchGestureRecognizer?.isEnabled = false
+        webView.scrollView.minimumZoomScale = 1
+        webView.scrollView.maximumZoomScale = 1
+        NotificationCenter.default.addObserver(forName: UIResponder.keyboardDidHideNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.webView.resetViewport() }
+        }
         #if DEBUG
         if #available(iOS 16.4, *) { webView.isInspectable = true } // Safari > Develop, for debugging
         #endif
@@ -113,6 +120,7 @@ extension WebHost: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.scrollView.pinchGestureRecognizer?.isEnabled = false
+        (webView as? FullScreenWebView)?.resetViewport()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -170,5 +178,20 @@ extension WebHost: WKDownloadDelegate {
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
         downloadFile = nil
+    }
+}
+
+/// A web view that always shows the page at its real size, filling the
+/// screen: never zoomed and never scrolled (the page's own panels scroll).
+final class FullScreenWebView: WKWebView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        resetViewport()
+    }
+
+    func resetViewport() {
+        let view = scrollView
+        if abs(view.zoomScale - 1) > 0.001 { view.setZoomScale(1, animated: false) }
+        if view.contentOffset != .zero { view.setContentOffset(.zero, animated: false) }
     }
 }

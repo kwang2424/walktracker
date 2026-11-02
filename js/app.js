@@ -184,6 +184,7 @@ function onHoodLoaded(id) {
   indexNodeNames(city.loaded.get(id).blocks);
   clearTimeout(redrawTimer);
   redrawTimer = setTimeout(() => {
+    city.refreshMatches();
     if (asleep()) { blocksDirty = true; return; }
     drawBlocks();
     renderStats();
@@ -308,6 +309,7 @@ async function rebuild() {
   const missing = [...ids].filter((id) => !city.loaded.has(id));
   if (missing.length > 4) toast('Loading your progress…', 15000);
   await city.ensure([...ids]).catch((err) => console.warn('Some neighborhoods did not load', err));
+  city.refreshMatches(); // every walk's neighborhoods are loaded: map-match them
   if (missing.length > 4) toast('');
   drawBlocks();
   updatePlaceVisits();

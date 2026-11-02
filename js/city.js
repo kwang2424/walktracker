@@ -3,7 +3,7 @@
 // own coverage engine, so the phone never has to hold all 100,000+ blocks.
 // No DOM here; fetching is passed in so this runs in Node tests too.
 import { CoverageEngine, polylineLength } from './geo.js';
-import { replayTracks } from './stats.js';
+import { StreetGraph, matchWalk } from './match.js';
 
 export const CITY_BASE = 'data/nyc/';
 const PAD = 0.0005; // ~50 m: a GPS point this close to a neighborhood can still cover its edge blocks
@@ -38,6 +38,8 @@ export class City {
     this.live = null; // points of the walk being recorded
     this.completedAt = new Map();
     this.newByTrack = new Map();
+    this.graph = new StreetGraph(); // every loaded block and path, for map matching
+    this.matches = new Map(); // walk -> map-matched steps (see js/match.js)
   }
 
   async init() {
@@ -83,6 +85,8 @@ export class City {
       const entry = { meta, blocks, paths, engine: new CoverageEngine(this.engineOpts), pathEngine: new CoverageEngine(this.engineOpts) };
       for (const b of blocks) this.blockHood.set(b.id, id);
       for (const p of paths) this.pathHood.set(p.id, id);
+      this.graph.add(blocks);
+      this.graph.add(paths);
       this._replay(entry);
       this.loaded.set(id, entry);
       this.pending.delete(id);
@@ -95,18 +99,81 @@ export class City {
   }
 
   // Rebuild one neighborhood's coverage from all walks that pass near it.
+  // Walks are map-matched once every neighborhood they touch is loaded; until
+  // then they count the simple way (near the GPS line), and refreshMatches()
+  // redoes the neighborhood later.
   _replay(entry) {
+    // Take back this neighborhood's earlier share of the tallies.
+    for (const [tid, n] of entry.contrib || []) this.newByTrack.set(tid, (this.newByTrack.get(tid) || 0) - n);
+    for (const b of entry.blocks) this.completedAt.delete(b.id);
+    entry.contrib = new Map();
+    entry.fallback = false;
     entry.engine.setBlocks(entry.blocks);
-    const near = this.tracks.filter((t) => intersects(t.bbox || (t.bbox = bboxOfPoints(t.points)), entry.meta.bbox, PAD));
-    const { completedAt, newByTrack } = replayTracks(entry.engine, near);
-    for (const [bid, time] of completedAt) this.completedAt.set(bid, time);
-    for (const [tid, n] of newByTrack) this.newByTrack.set(tid, (this.newByTrack.get(tid) || 0) + n);
     entry.pathEngine.setBlocks(entry.paths);
-    for (const t of near) entry.pathEngine.addTrack(t.points);
+    const near = this.tracks
+      .filter((t) => intersects(t.bbox || (t.bbox = bboxOfPoints(t.points)), entry.meta.bbox, PAD))
+      .sort((a, b) => a.startedAt - b.startedAt);
+    for (const t of near) {
+      const match = this.matchFor(t);
+      if (!match) entry.fallback = true;
+      const changed = new Set();
+      this._apply(entry, t.points, match, changed);
+      // Blocks this walk finished first (in time order): its "new blocks".
+      let n = 0;
+      for (const id of changed) {
+        if (!this.completedAt.has(id) && entry.engine.isWalked(id)) { this.completedAt.set(id, t.startedAt); n++; }
+      }
+      entry.contrib.set(t.id, n);
+      this.newByTrack.set(t.id, (this.newByTrack.get(t.id) || 0) + n);
+    }
     if (this.live?.length) {
       entry.engine.addTrack(this.live);
       entry.pathEngine.addTrack(this.live);
     }
+  }
+
+  // Count one walk's points in a neighborhood: along its matched streets, or
+  // (no match yet) everything near the GPS line.
+  _apply(entry, points, match, changed) {
+    const pathChanged = new Set();
+    if (!match) {
+      entry.engine.addTrack(points, changed);
+      entry.pathEngine.addTrack(points, pathChanged);
+      return;
+    }
+    for (const step of match) {
+      for (let k = step.a; k < step.b; k++) {
+        entry.engine.addSegment(points[k], points[k + 1], changed, step.allow);
+        entry.pathEngine.addSegment(points[k], points[k + 1], pathChanged, step.allow);
+      }
+      for (const f of step.fills) {
+        if (entry.engine.blocks.has(f.id)) entry.engine.coverAlong(f.id, f.m0, f.m1, changed);
+        else if (entry.pathEngine.blocks.has(f.id)) entry.pathEngine.coverAlong(f.id, f.m0, f.m1, pathChanged);
+      }
+    }
+  }
+
+  // A walk's map match, once all the neighborhoods it touches are loaded.
+  matchFor(t) {
+    const key = `${t.id ?? t.startedAt}:${t.points.length}:${t.endedAt ?? ''}`;
+    if (this.matches.has(key)) return this.matches.get(key);
+    const need = this.hoodsIn(t.bbox || (t.bbox = bboxOfPoints(t.points)), PAD);
+    if (!need.every((id) => this.loaded.has(id))) return null;
+    const match = matchWalk(this.graph, t.points);
+    this.matches.set(key, match);
+    return match;
+  }
+
+  // Redo neighborhoods that counted some walks the simple way, now that those
+  // walks can be matched. Returns true if anything was redone.
+  refreshMatches() {
+    let redone = false;
+    for (const entry of this.loaded.values()) {
+      if (!entry.fallback) continue;
+      const near = this.tracks.filter((t) => intersects(t.bbox || (t.bbox = bboxOfPoints(t.points)), entry.meta.bbox, PAD));
+      if (near.every((t) => this.matchFor(t))) { this._replay(entry); redone = true; }
+    }
+    return redone;
   }
 
   // Replace the list of saved walks: recomputes every loaded neighborhood and
@@ -115,6 +182,7 @@ export class City {
     this.tracks = tracks;
     this.completedAt = new Map();
     this.newByTrack = new Map();
+    for (const entry of this.loaded.values()) entry.contrib = null;
     for (const entry of this.loaded.values()) this._replay(entry);
     const ids = new Set();
     for (const t of tracks) for (const id of this.hoodsIn(t.bbox || (t.bbox = bboxOfPoints(t.points)), PAD)) ids.add(id);

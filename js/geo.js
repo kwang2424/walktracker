@@ -40,13 +40,18 @@ export function pointSegDist(p, a, b) {
 
 // Evenly spaced points along a polyline. The first and last `trim` meters are
 // skipped so that crossing an intersection doesn't count toward the side streets.
-export function sampleAlong(coords, step, trim = 0) {
-  const total = polylineLength(coords);
+// Where the samples go: meters from the start of a polyline `total` long.
+export function sampleTargets(total, step, trim = 0) {
   const t0 = Math.min(trim, total * 0.35);
   const span = total - 2 * t0;
   const n = Math.max(1, Math.round(span / step));
   const targets = [];
   for (let i = 0; i < n; i++) targets.push(t0 + ((i + 0.5) * span) / n);
+  return targets;
+}
+
+export function sampleAlong(coords, step, trim = 0) {
+  const targets = sampleTargets(polylineLength(coords), step, trim);
   const out = [];
   let walked = 0;
   let seg = 1;
@@ -166,8 +171,11 @@ export class CoverageEngine {
       : 0;
     this.project = makeProjector(lat0);
     for (const b of blocks) {
-      const samples = sampleAlong(b.coords, this.opts.step, this.opts.threshold * 1.5).map(this.project);
-      const state = { block: b, samples, covered: new Uint8Array(samples.length), count: 0 };
+      const trim = this.opts.threshold * 1.5;
+      const samples = sampleAlong(b.coords, this.opts.step, trim).map(this.project);
+      // Each sample's distance from the block's start (for coverAlong).
+      const alongs = sampleTargets(polylineLength(b.coords), this.opts.step, trim);
+      const state = { block: b, samples, alongs, covered: new Uint8Array(samples.length), count: 0 };
       this.blocks.set(b.id, state);
       samples.forEach((s, i) => {
         const key = this._key(Math.floor(s[0] / this.cell), Math.floor(s[1] / this.cell));
@@ -183,7 +191,9 @@ export class CoverageEngine {
   }
 
   // Mark samples near the segment a->b. Returns ids of blocks whose coverage changed.
-  addSegment(a, b, changed = new Set()) {
+  // `allow` (optional, from map matching): only these blocks may be covered,
+  // { ids: Set, names: Set } - a block counts if its id or its name is allowed.
+  addSegment(a, b, changed = new Set(), allow = null) {
     const dist = haversine(a, b);
     if (dist > this.opts.maxGap) return changed;
     if (a[2] != null && b[2] != null && b[2] > a[2] && dist / ((b[2] - a[2]) / 1000) > this.opts.maxSpeed) {
@@ -204,6 +214,7 @@ export class CoverageEngine {
           const state = list[j];
           const i = list[j + 1];
           if (state.covered[i]) continue;
+          if (allow && !allow.ids.has(state.block.id) && !(state.block.name && allow.names.has(state.block.name))) continue;
           if (pointSegDist(state.samples[i], pa, pb) <= th) {
             state.covered[i] = 1;
             state.count++;
@@ -212,6 +223,21 @@ export class CoverageEngine {
         }
       }
     }
+    return changed;
+  }
+
+  // Mark a stretch of one block as walked, from m0 to m1 meters along it (map
+  // matching uses this to fill short GPS gaps along the street you were on).
+  coverAlong(id, m0, m1, changed = new Set()) {
+    const state = this.blocks.get(id);
+    if (!state) return changed;
+    const lo = Math.min(m0, m1) - 5, hi = Math.max(m0, m1) + 5;
+    state.alongs.forEach((m, i) => {
+      if (m < lo || m > hi || state.covered[i]) return;
+      state.covered[i] = 1;
+      state.count++;
+      changed.add(id);
+    });
     return changed;
   }
 

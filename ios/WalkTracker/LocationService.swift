@@ -29,6 +29,22 @@ final class LocationService: NSObject {
     private var motionOn = false
     private var offFootSince: Date?
     private var finishTimer: Timer?
+    private var inVehicle = false // the motion sensor says car, train or bike
+    private var lastGoodFixAt = Date()
+    private var watchdog: Timer?
+    /// An auto walk ends after this long without one usable GPS fix (e.g. the
+    /// subway: underground there's only rough Wi-Fi/cell positioning).
+    private static let noFixLimit: TimeInterval = 300
+
+    /// A fix good enough to count toward walked streets. Underground and indoors
+    /// iOS falls back to Wi-Fi and cell positions (tens of meters off, no speed),
+    /// and a moving train gives fixes faster than anyone walks.
+    static func usable(_ l: CLLocation) -> Bool {
+        let acc = l.horizontalAccuracy
+        guard acc >= 0, acc <= 35 else { return false }
+        if l.speed > 7 { return false }
+        return acc <= 20 || l.speed >= 0
+    }
 
     private enum Mode { case off, idle, precise }
     private var mode = Mode.off
@@ -47,6 +63,7 @@ final class LocationService: NSObject {
         if journal.current != nil {
             offFootSince = Date()
             scheduleFinishCheck()
+            startWatchdog()
         }
         updateMode()
     }
@@ -139,17 +156,33 @@ final class LocationService: NSObject {
     private func handle(activity: CMMotionActivity) {
         guard autoTrack else { return }
         let onFoot = (activity.walking || activity.running) && activity.confidence != .low
+        if (activity.automotive || activity.cycling) && activity.confidence != .low { inVehicle = true }
+        if onFoot || activity.stationary { inVehicle = false }
         if onFoot {
             offFootSince = nil
             finishTimer?.invalidate()
             if journal.current == nil && watches.isEmpty {
                 journal.begin()
+                lastGoodFixAt = Date()
+                startWatchdog()
                 updateMode()
             }
-        } else if journal.current != nil, activity.stationary || activity.automotive || activity.cycling {
-            // Stopped, or got on a bike/in a car: end the walk if it stays that way.
+        } else if journal.current != nil, !(activity.walking || activity.running) {
+            // Stopped, on a train or in a car, or the sensor can't tell ("unknown",
+            // common on the subway): end the walk if it stays that way.
             if offFootSince == nil { offFootSince = Date() }
             scheduleFinishCheck()
+        }
+    }
+
+    /// Checks once a minute that an auto walk still gets usable GPS.
+    private func startWatchdog() {
+        watchdog?.invalidate()
+        watchdog = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.journal.current != nil else { return }
+                if -self.lastGoodFixAt.timeIntervalSinceNow >= Self.noFixLimit { self.finishAutoWalk() }
+            }
         }
     }
 
@@ -167,6 +200,8 @@ final class LocationService: NSObject {
 
     private func finishAutoWalk() {
         finishTimer?.invalidate()
+        watchdog?.invalidate()
+        watchdog = nil
         offFootSince = nil
         journal.finishCurrent()
         updateMode()
@@ -238,8 +273,11 @@ final class LocationService: NSObject {
             lastFix = location
             guard mode == .precise else { continue }
             let point = TrackPoint(location)
-            if journal.current != nil { journal.append(point) }
+            // Walks started in the app: the page gets every fix and filters them itself.
             if !watches.isEmpty { journal.queue(point) }
+            guard Self.usable(location) else { continue }
+            lastGoodFixAt = Date()
+            if journal.current != nil && !inVehicle { journal.append(point) }
         }
         if let fix = lastFix, !currentRequests.isEmpty, fix.horizontalAccuracy < 100 {
             for id in currentRequests { deliverCurrent?(id, TrackPoint(fix)) }

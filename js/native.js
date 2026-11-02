@@ -6,8 +6,13 @@ import { polylineLength } from './geo.js';
 export const native = (typeof window !== 'undefined' && window.walktrackerNative) || null;
 
 // A walk the phone recorded on its own -> a saved walk in the app's format.
+// Points may carry accuracy and speed (newer app versions): drop Wi-Fi/cell
+// positions (underground, indoors) and train-speed fixes, as the app does.
+export const usableFix = (acc, speed) =>
+  acc == null || (acc >= 0 && acc <= 35 && !(speed > 7) && (acc <= 20 || speed >= 0));
+
 export function nativeWalkToTrack(w, source = 'auto') {
-  const points = w.points.map(([lat, lon, t]) => [lat, lon, t]);
+  const points = w.points.filter(([, , , acc, speed]) => usableFix(acc, speed)).map(([lat, lon, t]) => [lat, lon, t]);
   return {
     name: `Walk on ${new Date(w.startedAt).toLocaleDateString([], { weekday: 'long' })}`,
     startedAt: w.startedAt,

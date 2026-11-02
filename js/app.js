@@ -561,7 +561,10 @@ function onPosition(pos) {
     return;
   }
   if (!asleep()) showMe(p);
-  if (accuracy > MIN_ACCURACY_M) {
+  // In the iPhone app a fix with no speed and over 20 m off is a Wi-Fi or cell
+  // position (underground, e.g. a subway station), not real GPS.
+  const wifiFix = native && pos.coords.speed == null && accuracy > 20;
+  if (accuracy > MIN_ACCURACY_M || wifiFix) {
     setGps('weak', `Weak GPS ±${Math.round(accuracy)} m`);
     return;
   }
@@ -1401,6 +1404,7 @@ async function importNativeWalks() {
   for (const w of walks || []) {
     if (have.has(w.id) || w.points.length < 2) continue;
     const t = nativeWalkToTrack(w);
+    if (t.points.length < 2) continue; // nothing usable (e.g. all underground)
     t.id = await db.put('tracks', t);
     tracks.push(t);
     added++;

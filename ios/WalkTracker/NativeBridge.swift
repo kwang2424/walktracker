@@ -106,7 +106,7 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
                     "id": walk.id,
                     "startedAt": walk.startedAt,
                     "endedAt": walk.endedAt,
-                    "points": walk.points.map { [$0.lat, $0.lon, $0.t] },
+                    "points": walk.points.map { [$0.lat, $0.lon, $0.t, $0.acc, $0.speed] },
                 ] as [String: Any]
             }
             return (walks, nil)

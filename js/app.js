@@ -1582,36 +1582,3 @@ window.walktracker = { city, db, rebuild, settings, view, awake, native, get rec
 document.addEventListener('focusout', (e) => {
   if (e.target.matches?.('input, textarea')) setTimeout(() => window.scrollTo(0, 0), 50);
 });
-
-// Temporary size check for the iPhone app: a box in the middle of the screen
-// showing how big iOS made the page. Tap it to close.
-window.showViewportCheck = () => {
-  if (location.protocol !== 'walktracker:') return;
-  let box = document.getElementById('vp-check');
-  if (!box) {
-    box = document.createElement('pre');
-    box.id = 'vp-check';
-    box.style.cssText = 'position:fixed;z-index:9999;left:50%;top:40%;transform:translateX(-50%);margin:0;padding:10px 12px;'
-      + 'width:230px;font:12px/1.35 ui-monospace,Menlo,monospace;white-space:pre-wrap;background:#fde047;color:#000;border-radius:10px';
-    box.addEventListener('click', () => box.remove());
-    document.body.append(box);
-  }
-  const probe = document.createElement('div');
-  probe.style.cssText = 'position:fixed;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)';
-  document.body.append(probe);
-  const cs = getComputedStyle(probe);
-  const safe = `${parseInt(cs.paddingTop)} / ${parseInt(cs.paddingBottom)}`;
-  probe.remove();
-  const vv = window.visualViewport;
-  const n = window.__nativeScreen || {};
-  box.textContent = [
-    'SIZE CHECK (tap to close)',
-    `page ${innerWidth}×${innerHeight}`,
-    `visible ${vv ? `${Math.round(vv.width)}×${Math.round(vv.height)} @${vv.scale.toFixed(2)}` : '?'}`,
-    `screen ${screen.width}×${screen.height} dpr ${devicePixelRatio}`,
-    `css safe ${safe}`,
-    `html ${document.documentElement.clientWidth}×${document.documentElement.clientHeight}`,
-    ...Object.entries(n).map(([k, v]) => `ios ${k} ${v}`),
-  ].join('\n');
-};
-setTimeout(() => window.showViewportCheck(), 2500);

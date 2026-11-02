@@ -25,7 +25,14 @@ WALKABLE = {
 def walkable(tags):
     if tags.get('highway') not in WALKABLE:
         return False
-    if tags.get('area') == 'yes' or tags.get('foot') == 'no':
+    if tags.get('area') == 'yes':
+        return False
+    # An explicit foot tag wins over access: Fulton Mall is access=no, bus=yes,
+    # foot=yes (closed to cars, open to people walking).
+    foot = tags.get('foot')
+    if foot in ('yes', 'designated', 'permissive'):
+        return True
+    if foot in ('no', 'private'):
         return False
     return tags.get('access') not in ('private', 'no')
 

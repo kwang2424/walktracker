@@ -8,7 +8,7 @@ import { weeklyChart, calendarChart } from './charts.js';
 import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { Places, ROUTE_COLORS } from './places.js';
 import { MAPBOX_TOKEN } from './config.js';
-import { City, CITY_BASE, overrideWalked } from './city.js';
+import { City, overrideWalked } from './city.js';
 import { KeepAwake, isIOS } from './awake.js';
 import { native, nativeWalkToTrack } from './native.js';
 
@@ -323,14 +323,14 @@ async function load() {
   view.setView([40.7306, -73.9866], 14);
   try {
     await city.init();
-    outlines = await fetch(CITY_BASE + 'neighborhoods.geojson').then((r) => r.json());
+    outlines = await fetch(city.url('neighborhoods.geojson')).then((r) => r.json());
   } catch (err) {
     console.error(err);
     toast('The NYC street data couldn’t load. Check your connection and reopen the app.', 10000);
     return;
   }
   view.setHoods(outlines);
-  places = await fetch(CITY_BASE + 'places.json').then((r) => r.json()).then((d) => new Places(d)).catch(() => null);
+  places = await fetch(city.url('places.json')).then((r) => r.json()).then((d) => new Places(d)).catch(() => null);
   if (places) view.setPlaces(places.items);
   await importNativeWalks();
   if (settings.healthAuto) await importHealth({ quiet: true });
@@ -1261,7 +1261,7 @@ async function checkAchievements() {
 }
 
 async function loadStreetTotals() {
-  streetTotals ||= fetch(CITY_BASE + 'streets.json').then((r) => r.json()).catch(() => null);
+  streetTotals ||= fetch(city.url('streets.json')).then((r) => r.json()).catch(() => null);
   return streetTotals;
 }
 

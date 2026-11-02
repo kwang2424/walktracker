@@ -35,7 +35,7 @@ function serve(city) {
   };
   const requests = [];
   const fetchImpl = async (url) => {
-    const path = url.replace(/^.*?data\/nyc\//, '');
+    const path = url.replace(/^.*?data\/nyc\//, '').replace(/\?.*$/, '');
     requests.push(path);
     return { ok: path in files, status: path in files ? 200 : 404, json: async () => structuredClone(files[path]) };
   };

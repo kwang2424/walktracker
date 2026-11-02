@@ -170,6 +170,9 @@ export function buildCity(raw, hoodsGeo, { outlineTolerance = 0.0001 } = {}) {
   const index = {
     version: 2,
     built: new Date().toISOString().slice(0, 10),
+    // Changes with every build; the app adds it to data URLs so a new build
+    // is never hidden behind a cached copy of the old one.
+    rev: Date.now().toString(36),
     attribution: 'Streets © OpenStreetMap contributors (ODbL). Neighborhoods: NYC Department of City Planning, 2020 NTAs.',
     total: {
       blocks: used.reduce((n, h) => n + h.blocks.length, 0),

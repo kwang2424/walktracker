@@ -59,9 +59,14 @@ final class AppSchemeHandler: NSObject, WKURLSchemeHandler {
         let original = task.request.url!
         Task { @MainActor in
             var request = URLRequest(url: remote)
+            // The index says which build of the data is current, so always fetch
+            // it fresh. Other files carry that build in their URL (?v=...), so a
+            // cached copy is always the right one.
+            if path.hasSuffix("index.json") { request.cachePolicy = .reloadIgnoringLocalCacheData }
             var result = try? await session.data(for: request)
             if result == nil {
                 // Offline: fall back to whatever was cached last time.
+                request = URLRequest(url: remote)
                 request.cachePolicy = .returnCacheDataDontLoad
                 result = try? await session.data(for: request)
             }

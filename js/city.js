@@ -25,7 +25,7 @@ export function bboxOfPoints(points) {
 export const overrideWalked = (v) => (typeof v === 'object' && v ? !!v.walked : !!v);
 
 export class City {
-  constructor({ base = CITY_BASE, fetchImpl = (u) => fetch(u), engineOpts = {}, onLoad } = {}) {
+  constructor({ base = CITY_BASE, fetchImpl = (u, opts) => fetch(u, opts), engineOpts = {}, onLoad } = {}) {
     this.base = base;
     this.fetch = fetchImpl;
     this.engineOpts = engineOpts;
@@ -41,11 +41,17 @@ export class City {
   }
 
   async init() {
-    const res = await this.fetch(this.base + 'index.json');
+    // Always ask whether the data changed (cheap: the server answers "not modified").
+    const res = await this.fetch(this.base + 'index.json', { cache: 'no-cache' });
     if (!res.ok) throw new Error(`city index: HTTP ${res.status}`);
     this.index = await res.json();
     this.hoods = new Map(this.index.hoods.map((h, i) => [h.id, { ...h, idx: i }]));
     return this;
+  }
+
+  // A data file's URL for this build of the data.
+  url(name) {
+    return this.base + name + (this.index?.rev ? `?v=${this.index.rev}` : '');
   }
 
   hoodsIn(bbox, pad = 0) {
@@ -61,7 +67,7 @@ export class City {
     if (this.loaded.has(id)) return Promise.resolve(this.loaded.get(id));
     if (this.pending.has(id)) return this.pending.get(id);
     const p = (async () => {
-      const res = await this.fetch(`${this.base}hoods/${id}.json`);
+      const res = await this.fetch(this.url(`hoods/${id}.json`));
       if (!res.ok) throw new Error(`neighborhood ${id}: HTTP ${res.status}`);
       const file = await res.json();
       const meta = this.hoods.get(id);

@@ -49,7 +49,10 @@ export class Places {
       for (let i = 0; i < flat.length; i += 2) platforms.push([flat[i], flat[i + 1]]);
       const lat = platforms.reduce((s, p) => s + p[0], 0) / platforms.length;
       const lon = platforms.reduce((s, p) => s + p[1], 0) / platforms.length;
-      this.items.push({ key: `S:${id}`, kind: 'station', id, name, routes, borough, hood, lat, lon,
+      // Where to draw it: each platform, merging ones within ~50 m of each other.
+      const spots = [];
+      for (const p of platforms) if (!spots.some((q) => Math.abs(q[0] - p[0]) < 0.00045 && Math.abs(q[1] - p[1]) < 0.0006)) spots.push(p);
+      this.items.push({ key: `S:${id}`, kind: 'station', id, name, routes, borough, hood, lat, lon, latlngs: platforms, spots,
         points: platforms.map((p) => this.project(p)), radius: STATION_RADIUS });
     }
     this.items.forEach((item, i) => { item.index = i; });
@@ -60,7 +63,7 @@ export class Places {
     // Grid: each item in every cell its catch area touches.
     this.grid = new Map();
     for (const item of this.items) {
-      const pts = item.kind === 'landmark' ? item.latlngs : [[item.lat, item.lon]];
+      const pts = item.latlngs;
       const pad = item.radius / 111000 + CELL / 4;
       const lats = pts.map((p) => p[0]), lons = pts.map((p) => p[1]);
       for (let cx = Math.floor((Math.min(...lons) - pad) / CELL); cx <= Math.floor((Math.max(...lons) + pad) / CELL); cx++) {

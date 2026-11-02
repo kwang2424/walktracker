@@ -92,8 +92,8 @@
     <span><i class="sw sw-partial"></i>Partly</span>
     <span><i class="sw sw-unwalked"></i>Not yet</span>
     <span><i class="sw sw-path"></i>Path</span>
-    <span><i class="dot dot-landmark"></i>Landmark</span>
-    <span><i class="dot dot-station"></i>Station</span>
+    <span data-kind="landmark"><img class="badge-ic" alt="">Landmark</span>
+    <span data-kind="station"><img class="badge-ic" alt="">Station</span>
   </div>
 
   <div id="toast" role="status" aria-live="polite"></div>
@@ -267,6 +267,10 @@
         </div>
         <label class="setting"><span><b>Show walk lines</b><small>Draw the GPS line of every walk.</small></span>
           <input type="checkbox" class="switch" data-setting="showTracks"></label>
+        <label class="setting"><span><b>Show landmarks</b><small>Gold badges for NYC landmarks, filled once you’ve walked by.</small></span>
+          <input type="checkbox" class="switch" data-setting="showLandmarks"></label>
+        <label class="setting"><span><b>Show subway stations</b><small>Purple badges for every station, filled once you’ve passed one.</small></span>
+          <input type="checkbox" class="switch" data-setting="showStations"></label>
       </div>
 
       <h3>Your data</h3>

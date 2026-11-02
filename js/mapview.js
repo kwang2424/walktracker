@@ -3,12 +3,14 @@
 // wants [lon, lat], so conversions happen here.
 /* global mapboxgl */
 
+import { drawBadge, badgeName } from './placeicons.js';
+
 const STYLE = 'mapbox://styles/mapbox/standard';
 const STATE = { none: 0, partial: 1, walked: 2 };
 const LIVE_EVERY_MS = 2000; // redraw the live walk line at most this often
 export const BLOCKS_MIN_ZOOM = 13; // below this, neighborhoods are shown shaded instead of blocks
 export const PATHS_MIN_ZOOM = 14.5; // park paths are dense; show them a bit closer in
-export const PLACE_COLORS = { landmark: '#ca8a04', station: '#7c3aed' };
+export { PLACE_COLORS } from './placeicons.js';
 
 const ll = (p) => [p[1], p[0]];
 const collection = (features) => ({ type: 'FeatureCollection', features });
@@ -22,7 +24,7 @@ function basemapConfig({ theme, dark }) {
     lightPreset: dark ? 'night' : 'day',
     show3dObjects: false,
     showPointOfInterestLabels: full,
-    showTransitLabels: true, // subway stations, in every look
+    showTransitLabels: false, // our own station badges replace Mapbox's (one icon per station, always lined up)
     showLandmarkIcons: false,
     showPedestrianRoads: full,
   };
@@ -76,7 +78,7 @@ export class MapView {
       const pad = 10; // finger-sized
       const box = [[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]];
       const place = this.map.queryRenderedFeatures(box, { layers: ['places'] })[0];
-      if (place) return onPlaceClick?.(place.id);
+      if (place) return onPlaceClick?.(place.properties.i);
       if (this.map.getZoom() < BLOCKS_MIN_ZOOM) {
         const hood = this.map.queryRenderedFeatures(e.point, { layers: ['hoods-fill'] })[0];
         if (hood) return onHoodClick?.(hood.id);
@@ -193,36 +195,101 @@ export class MapView {
       id: 'blocks-hit', type: 'line', source: 'blocks', layout: round, minzoom: BLOCKS_MIN_ZOOM,
       paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 22 },
     });
-    // Landmarks (gold) and subway stations (purple): hollow until visited.
+    // Landmarks and subway stations: round badges, outlined until visited.
+    // Station names show from zoom 15, landmark names from 17.
+    this._addBadges();
     m.addSource('places', { type: 'geojson', data: this.placesData });
-    const visited = ['boolean', ['feature-state', 'v'], false];
-    const isStation = ['==', ['get', 'kind'], 'station'];
-    add({
-      id: 'places', type: 'circle', source: 'places', minzoom: 12.5,
-      paint: {
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 12.5, 2.5, 15, 5, 18, 8],
-        'circle-color': ['case', visited, ['case', isStation, PLACE_COLORS.station, PLACE_COLORS.landmark], '#ffffff'],
-        'circle-stroke-color': ['case', isStation, PLACE_COLORS.station, PLACE_COLORS.landmark],
-        'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 12.5, 1, 16, 2],
-        'circle-emissive-strength': 1,
+    const kind = ['get', 'kind'];
+    const layer = {
+      id: 'places', type: 'symbol', source: 'places', minzoom: 12.5, filter: this._placeFilter(),
+      layout: {
+        'icon-image': ['concat', 'wt-', kind, ['case', ['get', 'v'], '-on', '-off']],
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 12.5, 0.55, 15, 0.85, 17, 1],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+        'symbol-sort-key': ['case', ['==', kind, 'station'], 1, 0],
+        'text-field': ['step', ['zoom'], '', 15, ['match', kind, 'station', ['get', 'name'], ''], 17, ['get', 'name']],
+        'text-font': this._fonts(),
+        'text-size': ['interpolate', ['linear'], ['zoom'], 15, 10.5, 18, 12.5],
+        'text-anchor': 'top',
+        'text-offset': [0, 1.1],
+        'text-max-width': 8,
+        'text-optional': true,
       },
-    });
+      paint: {
+        'text-color': this.look.dark ? '#e5e7eb' : '#374151',
+        'text-halo-color': this.look.dark ? 'rgba(17,24,39,0.9)' : 'rgba(255,255,255,0.95)',
+        'text-halo-width': 1.4,
+        'icon-emissive-strength': 1,
+        'text-emissive-strength': 1,
+      },
+    };
+    // Above street names, like Mapbox's own points of interest.
+    m.addLayer(this._isStandard() ? { ...layer, slot: 'top' } : layer);
     this._applyAllStates();
   }
 
-  // Landmarks and stations: [{ index, kind, lat, lon }].
+  // Fonts for our labels: Mapbox's own in Standard, else whatever the style uses.
+  _fonts() {
+    if (this._isStandard()) return ['DIN Pro Medium', 'Arial Unicode MS Regular'];
+    const withFont = (this.map.getStyle().layers || []).find((l) => Array.isArray(l.layout?.['text-font']));
+    return withFont ? withFont.layout['text-font'] : ['Open Sans Regular'];
+  }
+
+  _addBadges() {
+    for (const kind of ['landmark', 'station']) {
+      for (const visited of [false, true]) {
+        const canvas = drawBadge(kind, visited, { dark: this.look.dark, ratio: 2 });
+        const image = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+        const name = badgeName(kind, visited);
+        if (this.map.hasImage(name)) this.map.updateImage(name, image);
+        else this.map.addImage(name, image, { pixelRatio: 2 });
+      }
+    }
+  }
+
+  // Which kinds of places to show: { landmark: true, station: true }.
+  setPlaceKinds(kinds) {
+    this.placeKinds = { ...this.placeKinds, ...kinds };
+    if (this.map.getLayer('places')) this.map.setFilter('places', this._placeFilter());
+  }
+
+  _placeFilter() {
+    const on = Object.entries(this.placeKinds || { landmark: true, station: true }).filter(([, v]) => v).map(([k]) => k);
+    return on.length ? ['in', ['get', 'kind'], ['literal', on]] : ['==', 1, 0];
+  }
+
+  // Landmarks and stations: [{ index, kind, name, lat, lon, spots? }]. A station
+  // gets a badge at each of its platforms (merged when close together), so big
+  // complexes like Atlantic Av-Barclays Ctr show where each part really is.
   setPlaces(items) {
-    this.placesData = collection(items.map((p) => ({
-      type: 'Feature', id: p.index, properties: { kind: p.kind }, geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
-    })));
-    this.map.getSource('places')?.setData(this.placesData);
-    this._applyAllStates();
+    this.placeItems = items;
+    this._renderPlaces();
   }
 
+  _renderPlaces() {
+    const features = [];
+    for (const p of this.placeItems || []) {
+      const v = !!this.placeVisited.get(p.index);
+      (p.spots || [[p.lat, p.lon]]).forEach(([lat, lon], n) => {
+        features.push({
+          // Big complexes have several badges; only the first is labeled.
+          type: 'Feature', id: features.length, properties: { i: p.index, kind: p.kind, name: n ? '' : p.name, v },
+          geometry: { type: 'Point', coordinates: [lon, lat] },
+        });
+      });
+    }
+    this.placesData = collection(features);
+    this.map.getSource('places')?.setData(this.placesData);
+  }
+
+  // Visits change rarely; redraw the badges once per frame at most.
   setPlaceVisited(index, on = true) {
-    if (this.placeVisited.get(index) === on) return;
+    if (!!this.placeVisited.get(index) === on) return;
     this.placeVisited.set(index, on);
-    if (this._ready()) this.map.setFeatureState({ source: 'places', id: index }, { v: on });
+    if (this.placesQueued) return;
+    this.placesQueued = true;
+    requestAnimationFrame(() => { this.placesQueued = false; this._renderPlaces(); });
   }
 
   _ready() {
@@ -235,7 +302,6 @@ export class MapView {
     for (const i of this.highlighted) this.map.setFeatureState({ source: 'blocks', id: i }, { hl: true });
     for (const [i, pct] of this.hoodStates) this.map.setFeatureState({ source: 'hoods', id: i }, { pct });
     if (this.hoodLit != null) this.map.setFeatureState({ source: 'hoods', id: this.hoodLit }, { hl: true });
-    for (const [i, v] of this.placeVisited) this.map.setFeatureState({ source: 'places', id: i }, { v });
   }
 
   // Neighborhood outlines (GeoJSON with numeric feature ids).
@@ -261,7 +327,13 @@ export class MapView {
   setLook(look) {
     const next = { ...this.look, ...look };
     if (next.theme === this.look.theme && next.dark === this.look.dark) return;
+    const darkChanged = next.dark !== this.look.dark;
     this.look = next;
+    if (darkChanged && this.map.getLayer('places')) {
+      this._addBadges();
+      this.map.setPaintProperty('places', 'text-color', next.dark ? '#e5e7eb' : '#374151');
+      this.map.setPaintProperty('places', 'text-halo-color', next.dark ? 'rgba(17,24,39,0.9)' : 'rgba(255,255,255,0.95)');
+    }
     for (const [k, v] of Object.entries(basemapConfig(next))) {
       try { this.map.setConfigProperty('basemap', k, v); } catch (err) { console.warn('Map look not applied', k, err); }
     }

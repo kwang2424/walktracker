@@ -7,6 +7,7 @@ import { evaluate, factsFrom } from './achievements.js';
 import { weeklyChart, calendarChart } from './charts.js';
 import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { Places, ROUTE_COLORS } from './places.js';
+import { drawBadge } from './placeicons.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, overrideWalked } from './city.js';
 import { KeepAwake, isIOS } from './awake.js';
@@ -27,7 +28,7 @@ const $ = (sel) => document.querySelector(sel);
 
 // ---------------------------------------------------------------- settings
 const SETTINGS_KEY = 'walktracker.settings';
-const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true, hudScope: 'hood' };
+const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true, hudScope: 'hood', showLandmarks: true, showStations: true };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch { /* private mode */ }
 if (settings.detailedMap) settings.mapTheme = 'default'; // older setting
 delete settings.detailedMap;
@@ -134,10 +135,13 @@ const view = token && mapLibLoaded ? new MapView($('#map'), {
   onMoveEnd: () => onMapMoved(),
   onAuthError: (status) => showSetup(`Mapbox didn’t accept this token (error ${status}). Check that it’s copied fully, and if it has URL restrictions, that they include ${location.origin + location.pathname.replace(/index\.html$/, '')}`),
 }) : null;
+view?.setPlaceKinds({ landmark: settings.showLandmarks, station: settings.showStations });
+queueMicrotask(() => renderLegend());
 
 function applyMapStyle() {
   view.setColors(readColors());
   view.setLook(mapLook());
+  renderLegend();
 }
 if (view) darkQuery.addEventListener('change', applyMapStyle);
 
@@ -185,6 +189,18 @@ function onHoodLoaded(id) {
   }, 120);
 }
 let blocksDirty = false;
+
+// Legend badges are drawn by the same code as the map's, so they always match.
+function renderLegend() {
+  const { dark } = mapLook();
+  for (const [kind, on] of [['landmark', settings.showLandmarks], ['station', settings.showStations]]) {
+    const el = document.querySelector(`#legend [data-kind="${kind}"]`);
+    if (!el) continue;
+    el.hidden = !on;
+    const img = el.querySelector('img');
+    img.src = drawBadge(kind, false, { dark, ratio: 3 }).toDataURL();
+  }
+}
 
 function drawTracks() {
   view.setTracks(tracks.map((t) => t.points));
@@ -1567,6 +1583,10 @@ function onSettingChange(key, value) {
   saveSettings();
   if (key === 'mapTheme') { applyMapStyle(); renderSettings(); }
   if (key === 'showTracks') drawTracks();
+  if (key === 'showLandmarks' || key === 'showStations') {
+    view?.setPlaceKinds({ landmark: settings.showLandmarks, station: settings.showStations });
+    renderLegend();
+  }
   if (key === 'autoDark') armAutoDark();
   if (key === 'smartGps') {
     if (value) askMotionPermission();

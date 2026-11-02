@@ -152,6 +152,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .sw-partial { background: var(--partial); }
 .sw-unwalked { background: var(--unwalked); }
 .sw-path { height: 0; background: none; border-top: 3px dotted var(--unwalked); border-radius: 0; }
+.badge-ic { width: 15px; height: 15px; display: inline-block; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #fff; border: 2px solid; }
 .dot-landmark { border-color: #ca8a04; background: #ca8a04; }
 .dot-station { border-color: #7c3aed; background: #7c3aed; }

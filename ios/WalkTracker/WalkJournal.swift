@@ -8,13 +8,17 @@ struct TrackPoint: Codable {
     let t: Double
     let acc: Double
     let speed: Double
+    /// Steps counted by the phone since GPS was turned on for this walk (nil if
+    /// the pedometer isn't available). Moving far with no new steps = riding.
+    var steps: Int?
 
-    init(_ location: CLLocation) {
+    init(_ location: CLLocation, steps: Int? = nil) {
         lat = location.coordinate.latitude
         lon = location.coordinate.longitude
         t = (location.timestamp.timeIntervalSince1970 * 1000).rounded()
         acc = location.horizontalAccuracy
         speed = location.speed
+        self.steps = steps
     }
 
     var location: CLLocation { CLLocation(latitude: lat, longitude: lon) }

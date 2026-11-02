@@ -23,6 +23,8 @@ final class LocationService: NSObject {
     let journal = WalkJournal()
     private let manager = CLLocationManager()
     private let motion = CMMotionActivityManager()
+    private let pedometer = CMPedometer()
+    private var steps: Int? // running count while GPS is on (precise mode)
     private var watches = Set<Int>() // web app watchPosition ids
     private var currentRequests = Set<Int>() // web app getCurrentPosition ids
     private var lastFix: CLLocation?
@@ -208,6 +210,23 @@ final class LocationService: NSObject {
         onAutoWalkFinished?()
     }
 
+    /// Counts steps while GPS records, so rides (subway, bus, car) can be told
+    /// apart from walking: lots of distance, no steps.
+    private func startPedometer() {
+        guard CMPedometer.isStepCountingAvailable(), CMPedometer.authorizationStatus() != .denied,
+              CMPedometer.authorizationStatus() != .restricted else { return }
+        steps = 0
+        pedometer.startUpdates(from: Date()) { [weak self] data, _ in
+            guard let count = data?.numberOfSteps.intValue else { return }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.steps = count } }
+        }
+    }
+
+    private func stopPedometer() {
+        pedometer.stopUpdates()
+        steps = nil
+    }
+
     private func startMotion() {
         guard !motionOn, CMMotionActivityManager.isActivityAvailable() else { return }
         motionOn = true
@@ -250,6 +269,7 @@ final class LocationService: NSObject {
         mode = next
         switch next {
         case .precise:
+            startPedometer()
             manager.desiredAccuracy = kCLLocationAccuracyBest
             manager.distanceFilter = 4
             manager.pausesLocationUpdatesAutomatically = false
@@ -257,6 +277,7 @@ final class LocationService: NSObject {
             manager.showsBackgroundLocationIndicator = true
             manager.startUpdatingLocation()
         case .idle:
+            stopPedometer()
             manager.desiredAccuracy = kCLLocationAccuracyKilometer
             manager.distanceFilter = 200
             manager.pausesLocationUpdatesAutomatically = false
@@ -264,6 +285,7 @@ final class LocationService: NSObject {
             manager.showsBackgroundLocationIndicator = false
             manager.startUpdatingLocation()
         case .off:
+            stopPedometer()
             manager.stopUpdatingLocation()
         }
     }
@@ -272,7 +294,7 @@ final class LocationService: NSObject {
         for location in locations where location.horizontalAccuracy >= 0 {
             lastFix = location
             guard mode == .precise else { continue }
-            let point = TrackPoint(location)
+            let point = TrackPoint(location, steps: steps)
             // Walks started in the app: the page gets every fix and filters them itself.
             if !watches.isEmpty { journal.queue(point) }
             guard Self.usable(location) else { continue }

@@ -8,6 +8,7 @@ import { weeklyChart, calendarChart } from './charts.js';
 import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { Places, ROUTE_COLORS } from './places.js';
 import { drawBadge } from './placeicons.js';
+import { LiveFilter, isRiding } from './track.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, overrideWalked } from './city.js';
 import { KeepAwake, isIOS } from './awake.js';
@@ -569,7 +570,7 @@ function stopGps() {
 function onPosition(pos) {
   if (!rec) return;
   const { latitude, longitude, accuracy } = pos.coords;
-  const p = [latitude, longitude, pos.timestamp || Date.now()];
+  let p = [latitude, longitude, pos.timestamp || Date.now()];
 
   if (rec.paused) {
     // Low-power fallback while stopped: wake once we've clearly moved.
@@ -584,12 +585,25 @@ function onPosition(pos) {
     setGps('weak', `Weak GPS ±${Math.round(accuracy)} m`);
     return;
   }
+  // Moved a long way without taking steps (iPhone app only): a train or bus.
+  const raw = [latitude, longitude, p[2], accuracy, pos.steps ?? undefined];
+  rec.recent = (rec.recent || []).filter((q) => raw[2] - q[2] <= 45000);
+  rec.recent.push(raw);
+  if (isRiding(rec.recent[0], raw)) {
+    rec.recent = [raw]; // walking right after the ride still counts
+    setGps('weak', 'Riding, not walking: not counted');
+    return;
+  }
   setGps('good', `GPS ±${Math.round(accuracy)} m`);
   // (The iPhone app manages GPS power itself, and must keep recording in the background.)
   if (settings.smartGps && !native && rec.still.update(p, accuracy) === 'still') {
     pause();
     return;
   }
+  // Smooth out GPS zigzags and drop one-off spikes (see js/track.js).
+  const smooth = (rec.filter ||= new LiveFilter()).push(raw);
+  if (!smooth) return;
+  p = smooth.slice(0, 3);
   const last = rec.points[rec.points.length - 1];
   if (last && haversine(last, p) < MIN_STEP_M) return;
   rec.points.push(p);

@@ -16,6 +16,7 @@ enum NativeBridge {
         coords: { latitude: p.lat, longitude: p.lon, accuracy: p.acc, speed: p.speed >= 0 ? p.speed : null,
                   altitude: null, altitudeAccuracy: null, heading: null },
         timestamp: p.t,
+        steps: p.steps, // running step count from the phone's pedometer, if known
       });
       const toError = (code, message) => ({ code, message, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
 
@@ -106,7 +107,7 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
                     "id": walk.id,
                     "startedAt": walk.startedAt,
                     "endedAt": walk.endedAt,
-                    "points": walk.points.map { [$0.lat, $0.lon, $0.t, $0.acc, $0.speed] },
+                    "points": walk.points.map { [$0.lat, $0.lon, $0.t, $0.acc, $0.speed, Double($0.steps ?? -1)] },
                 ] as [String: Any]
             }
             return (walks, nil)

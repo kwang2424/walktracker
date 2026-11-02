@@ -1375,6 +1375,7 @@ function renderSettings() {
   $('#battery-settings').hidden = !!native;
   if (native) native.call('status').then(renderNativeStatus).catch(() => {});
   if (native) native.call('healthAvailable').then((ok) => { $('#health-settings').hidden = !ok; }).catch(() => {});
+  if (native) renderBackupStatus();
   document.querySelectorAll('#map-theme button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.theme === settings.mapTheme));
   renderStorageInfo();
 }
@@ -1449,6 +1450,88 @@ async function importHealth({ quiet = false, rebuildAfter = true } = {}) {
     importingHealth = false;
   }
   return added;
+}
+
+// Automatic backup (iPhone app): after any change to walks or blocks, the whole
+// backup is written to a folder picked once in Files, e.g. in iCloud Drive.
+let backupFolder = null;
+let backupTimer = 0;
+let lastBackupAt = Number(localStorage.getItem('walktracker.lastBackup')) || 0;
+const BACKUP_DELAY = 10000;     // wait for a burst of changes to settle
+const BACKUP_MIN_GAP = 120000;  // and back up at most every 2 minutes while things keep changing
+
+async function loadBackupFolder() {
+  if (!native) return;
+  try { backupFolder = await native.call('backupFolder'); } catch { backupFolder = null; }
+}
+
+function scheduleBackup() {
+  if (!native || !backupFolder) return;
+  clearTimeout(backupTimer);
+  const wait = Math.max(BACKUP_DELAY, lastBackupAt + BACKUP_MIN_GAP - Date.now());
+  backupTimer = setTimeout(() => runBackup({ quiet: true }), wait);
+}
+
+async function runBackup({ quiet = false } = {}) {
+  clearTimeout(backupTimer);
+  backupTimer = 0;
+  if (!native || !backupFolder) return;
+  // A walk in progress saves itself every few seconds; back up once it's over.
+  if (rec && quiet) { backupTimer = setTimeout(() => runBackup({ quiet: true }), BACKUP_MIN_GAP); return; }
+  try {
+    const json = JSON.stringify(await db.exportAll());
+    await native.call('writeBackup', { json, day: stamp() });
+    lastBackupAt = Date.now();
+    try { localStorage.setItem('walktracker.lastBackup', String(lastBackupAt)); } catch {}
+    if (!quiet) toast(`Backed up to “${backupFolder}”`);
+  } catch (err) {
+    toast(`Backup failed: ${err.message || err}`, 6000);
+  }
+  if (!$('#native-settings').hidden) renderBackupStatus();
+}
+
+function renderBackupStatus() {
+  const on = !!backupFolder;
+  $('#btn-backup-folder').textContent = on ? `Backup folder: ${backupFolder}` : 'Choose backup folder';
+  $('#btn-backup-now').hidden = !on;
+  $('#btn-backup-stop').hidden = !on;
+  $('#backup-status').textContent = on
+    ? `On. Saves “WalkTracker backup.json” (plus a copy for each of the last 10 days) after every change. `
+      + (lastBackupAt ? `Last backup ${new Date(lastBackupAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}.` : 'No backup yet.')
+      + ' To restore, use Import backup below and pick the file.'
+    : 'Pick a folder (an iCloud Drive folder keeps it off this phone) and WalkTracker saves a backup there after every change. To restore, use Import backup below and pick the file.';
+}
+
+async function chooseBackupFolder() {
+  try {
+    const name = await native.call('chooseBackupFolder');
+    if (!name) return;
+    backupFolder = name;
+    await runBackup();
+  } catch (err) {
+    toast(`Couldn’t use that folder: ${err.message || err}`, 6000);
+  }
+  renderBackupStatus();
+}
+
+async function stopBackup() {
+  if (!confirm('Stop backing up automatically? Backups already saved stay in the folder.')) return;
+  await native.call('forgetBackupFolder').catch(() => {});
+  backupFolder = null;
+  clearTimeout(backupTimer);
+  renderBackupStatus();
+}
+
+if (native) {
+  db.onChange = scheduleBackup;
+  loadBackupFolder();
+  // Leaving the app: don't wait for the timer.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && backupTimer) runBackup({ quiet: true });
+  });
+  $('#btn-backup-folder').addEventListener('click', chooseBackupFolder);
+  $('#btn-backup-now').addEventListener('click', () => runBackup());
+  $('#btn-backup-stop').addEventListener('click', stopBackup);
 }
 
 function renderNativeStatus(st) {

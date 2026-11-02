@@ -85,6 +85,7 @@ final class LocationMessages: NSObject, WKScriptMessageHandler {
 final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
     private let location: LocationService
     private let health = HealthImporter()
+    private let backup = BackupFolder()
 
     init(location: LocationService) {
         self.location = location
@@ -126,6 +127,26 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
                 let limit = (body["limit"] as? NSNumber)?.intValue ?? 20
                 let page = try await health.walks(since: since, limit: limit)
                 return (["walks": page.walks, "more": page.more, "cursor": page.cursor] as [String: Any], nil)
+            } catch {
+                return (nil, error.localizedDescription)
+            }
+        case "backupFolder":
+            return (backup.folderName.map { $0 as Any } ?? NSNull(), nil)
+        case "chooseBackupFolder":
+            do {
+                let name = try await backup.choose()
+                return (name.map { $0 as Any } ?? NSNull(), nil)
+            } catch {
+                return (nil, error.localizedDescription)
+            }
+        case "forgetBackupFolder":
+            backup.forget()
+            return (true, nil)
+        case "writeBackup":
+            guard let json = body["json"] as? String else { return (nil, "No backup data") }
+            do {
+                try backup.write(json, day: body["day"] as? String ?? "latest")
+                return (true, nil)
             } catch {
                 return (nil, error.localizedDescription)
             }

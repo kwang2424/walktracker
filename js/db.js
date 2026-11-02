@@ -43,12 +43,19 @@ async function run(store, mode, fn) {
   });
 }
 
+// Writes to anything that goes in a backup (not 'meta') call db.onChange.
+const write = (store, fn) => run(store, 'readwrite', fn).then((r) => {
+  if (store !== 'meta') db.onChange?.(store);
+  return r;
+});
+
 export const db = {
+  onChange: null,
   all: (store) => run(store, 'readonly', (s) => s.getAll()),
   get: (store, key) => run(store, 'readonly', (s) => s.get(key)),
-  put: (store, value, key) => run(store, 'readwrite', (s) => s.put(value, key)),
-  delete: (store, key) => run(store, 'readwrite', (s) => s.delete(key)),
-  clear: (store) => run(store, 'readwrite', (s) => s.clear()),
+  put: (store, value, key) => write(store, (s) => s.put(value, key)),
+  delete: (store, key) => write(store, (s) => s.delete(key)),
+  clear: (store) => write(store, (s) => s.clear()),
 
   async overrides() {
     const dbi = await open();

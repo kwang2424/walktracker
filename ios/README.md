@@ -41,6 +41,9 @@ You need a Mac with **Xcode** (free from the Mac App Store, version 16 or newer)
   allow motion access and set location to **Always** (iPhone asks; or Settings → WalkTracker → Location).
 - To bring in past walks: Menu → Settings → **Import walks from Apple Health**, and allow access to Workouts
   and Workout Routes when Apple asks. (Apple Health works with a free Apple ID.)
+- To keep a copy off the phone: Menu → Settings → **Choose backup folder**, and pick a folder in iCloud
+  Drive. After every change the app saves `WalkTracker backup.json` there (plus daily copies in
+  `Older backups`, last 10 days). To restore, use **Import backup** and pick that file.
 - Your walks from the website don't move over automatically. Export a backup there (Settings → Export
   backup) and import it in the app.
 
@@ -63,6 +66,7 @@ Pull the latest code (`git pull` in the `walktracker` folder) and press **▶ Ru
 | `WalkTracker/NativeBridge.swift` | Connects the page to the phone: GPS in place of the browser's, and app commands |
 | `WalkTracker/LocationService.swift` | GPS and motion: walks you start, and automatic walks |
 | `WalkTracker/WalkJournal.swift` | Saves walks recorded in the background until the app takes them |
+| `WalkTracker/BackupFolder.swift` | Automatic backups to a folder you pick once in Files (e.g. iCloud Drive) |
 | `WalkTracker/HealthImporter.swift` | Reads walking workouts and their routes from Apple Health (read-only) |
 | `WalkTracker.entitlements` | Turns on Apple Health access |
 | `WalkTracker/AppConfig.swift` | The website address for street data |

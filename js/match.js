@@ -35,14 +35,14 @@ export class StreetGraph {
   }
 
   // blocks/paths as loaded by City: { id, name, coords: [[lat, lon]] }.
-  add(blocks) {
+  add(blocks, { path = false } = {}) {
     for (const b of blocks) {
       if (this.edges.has(b.id)) continue;
       const pts = b.coords.map(this.project);
       const cum = [0];
       for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
       const [from, to] = nodesOf(b.id);
-      const e = { id: b.id, name: b.name || '', len: cum[cum.length - 1], pts, cum, from, to };
+      const e = { id: b.id, name: b.name || '', len: cum[cum.length - 1], pts, cum, from, to, coords: b.coords, path };
       this.edges.set(b.id, e);
       for (const [node, atStart] of [[from, true], [to, false]]) {
         if (!this.adj.has(node)) this.adj.set(node, []);
@@ -129,7 +129,9 @@ export class StreetGraph {
 
 // points: [[lat, lon, t]]. Returns steps: [{ a, b, allow: { ids, names }, fills: [{ id, m0, m1 }] }]
 // covering point indexes a..b, or [] where nothing matched (off the network).
-export function matchWalk(graph, points) {
+export function matchWalk(graph, points, breaks = []) {
+  const brk = [...breaks].sort((a, b) => a - b);
+  const breakBetween = (i, j) => brk.some((b) => b > i && b <= j);
   // Thin the walk to a point every ~STEP_M meters (keeping indexes).
   const keep = [];
   for (let i = 0; i < points.length; i++) {
@@ -144,7 +146,8 @@ export function matchWalk(graph, points) {
   for (const i of keep) {
     const cands = graph.candidates(points[i]);
     const last = chain[chain.length - 1];
-    const gap = last && (haversine(points[last.i], points[i]) > BREAK_GAP_M || points[i][2] - points[last.i][2] > BREAK_GAP_MS);
+    const gap = last && (haversine(points[last.i], points[i]) > BREAK_GAP_M || points[i][2] - points[last.i][2] > BREAK_GAP_MS
+      || breakBetween(last.i, i));
     if (!cands.length || gap) flush();
     if (cands.length) chain.push({ i, cands });
   }

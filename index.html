@@ -80,7 +80,12 @@
   <!-- Placing a no-tracking area: the circle follows the middle of the map -->
   <section id="zone-edit" class="card notice" hidden>
     <b>New no-tracking area</b>
-    <p class="muted">Move the map so the circle covers the place.</p>
+    <div class="segmented zone-shape" id="zone-shape">
+      <button data-shape="circle" aria-pressed="true">Circle</button>
+      <button data-shape="block" aria-pressed="false">This block</button>
+      <span></span>
+    </div>
+    <p class="muted" id="zone-hint">Move the map so the circle covers the place.</p>
     <input id="zone-name" class="text-input" type="text" placeholder="Name, e.g. Work" autocomplete="off" maxlength="40">
     <div class="segmented" id="zone-size">
       <button data-r="100" aria-pressed="false">Small</button>

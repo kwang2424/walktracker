@@ -102,3 +102,17 @@ test('points far from any street match nothing', () => {
   g.add([{ id: '1:1-2:0', name: 'A', coords: [at(0, 0), at(100, 0)] }]);
   assert.deepEqual(matchWalk(g, [[...at(50, 300), 0], [...at(60, 300), 10000]]), []);
 });
+
+test('a break in a walk (a no-tracking area) is never filled in', async () => {
+  // Walk Lower St with a break where an area removed x=60..150.
+  const pts = along(0, 200, -150).filter(([lat, lon]) => { const x = (lon - LON0) / MX; return x < 60 || x > 150; });
+  const breakAt = pts.findIndex(([, lon]) => (lon - LON0) / MX > 150);
+  const built = buildCity(raw, hoodsGeo);
+  const files = { 'index.json': built.index, 'hoods/T1.json': built.files.T1 };
+  const fetchImpl = async (url) => ({ ok: true, status: 200, json: async () => structuredClone(files[url.replace(/^.*?data\/nyc\//, '').replace(/\?.*$/, '')]) });
+  const city = await new City({ fetchImpl }).init();
+  await city.ensure(city.setTracks([{ id: 1, startedAt: 0, points: pts, breaks: [breakAt] }]));
+  city.refreshMatches();
+  const first = city.loaded.get('T1').blocks.find((b) => b.name === 'Lower St' && b.coords[0][1] < LON0 + 1 * MX);
+  assert.equal(city.isWalked(first.id), false, `fraction ${city.fraction(first.id)}`);
+});

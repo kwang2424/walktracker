@@ -107,7 +107,7 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
                     "id": walk.id,
                     "startedAt": walk.startedAt,
                     "endedAt": walk.endedAt,
-                    "points": walk.points.map { [$0.lat, $0.lon, $0.t, $0.acc, $0.speed, Double($0.steps ?? -1)] },
+                    "points": walk.points.map { [$0.lat, $0.lon, $0.t, $0.acc, $0.speed, Double($0.steps ?? -1), $0.gap == true ? 1 : 0] },
                 ] as [String: Any]
             }
             return (walks, nil)
@@ -156,7 +156,8 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
             location.zones = raw.compactMap { z in
                 guard let lat = (z["lat"] as? NSNumber)?.doubleValue, let lon = (z["lon"] as? NSNumber)?.doubleValue,
                       let r = (z["r"] as? NSNumber)?.doubleValue else { return nil }
-                return LocationService.Zone(lat: lat, lon: lon, r: r)
+                let ring = (z["ring"] as? [[NSNumber]])?.map { $0.map(\.doubleValue) }
+                return LocationService.Zone(lat: lat, lon: lon, r: r, ring: ring, pad: (z["pad"] as? NSNumber)?.doubleValue)
             }
             return (true, nil)
         case "walkActivity":

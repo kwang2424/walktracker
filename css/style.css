@@ -146,6 +146,10 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .wd-range { display: grid; grid-template-columns: 44px 1fr; align-items: center; gap: 8px; margin: 6px 0; font-size: 13px; }
 .wd-range input { width: 100%; accent-color: var(--accent); }
 #zone-edit .segmented { margin: 10px 0 12px; }
+#zone-edit .zone-shape { grid-template-columns: 1fr 1fr; margin: 10px 0 4px; }
+#zone-edit .zone-shape span { display: none; }
+#zone-edit .text-input { margin-bottom: 12px; }
+#zone-edit #zone-size { margin-top: 0; }
 .text-input { width: 100%; font: inherit; font-size: 16px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
 #zone-list .setting b { cursor: pointer; }
 .sum-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }

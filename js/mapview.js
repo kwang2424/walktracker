@@ -4,7 +4,7 @@
 /* global mapboxgl */
 
 import { drawBadge, badgeName } from './placeicons.js';
-import { circleRing } from './zones.js';
+import { zoneRing } from './zones.js';
 
 const STYLE = 'mapbox://styles/mapbox/standard';
 const STATE = { none: 0, partial: 1, walked: 2 };
@@ -80,6 +80,8 @@ export class MapView {
     // out) the neighborhood, then (zoomed in) the block.
     this.map.on('click', (e) => {
       if (!this._ready()) return;
+      // While picking a block for a no-tracking area, a tap only picks.
+      if (this.onPick) return this.onPick([e.lngLat.lat, e.lngLat.lng]);
       const pad = 10; // finger-sized
       const box = [[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]];
       const place = this.map.queryRenderedFeatures(box, { layers: ['places'] })[0];
@@ -292,7 +294,7 @@ export class MapView {
   // No-tracking areas ([{ lat, lon, r }]) and, while adding one, its preview.
   setZones(zones, preview = null) {
     const features = [...zones, ...(preview ? [{ ...preview, edit: 1 }] : [])].map((z) => ({
-      type: 'Feature', properties: { edit: z.edit || 0 }, geometry: { type: 'Polygon', coordinates: [circleRing(z)] },
+      type: 'Feature', properties: { edit: z.edit || 0 }, geometry: { type: 'Polygon', coordinates: [zoneRing(z)] },
     }));
     this.zonesData = collection(features);
     this.map.getSource('zones')?.setData(this.zonesData);

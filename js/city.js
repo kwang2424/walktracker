@@ -4,6 +4,7 @@
 // No DOM here; fetching is passed in so this runs in Node tests too.
 import { CoverageEngine, polylineLength } from './geo.js';
 import { StreetGraph, matchWalk } from './match.js';
+import { runsOf } from './zones.js';
 
 export const CITY_BASE = 'data/nyc/';
 const PAD = 0.0005; // ~50 m: a GPS point this close to a neighborhood can still cover its edge blocks
@@ -86,7 +87,7 @@ export class City {
       for (const b of blocks) this.blockHood.set(b.id, id);
       for (const p of paths) this.pathHood.set(p.id, id);
       this.graph.add(blocks);
-      this.graph.add(paths);
+      this.graph.add(paths, { path: true });
       this._replay(entry);
       this.loaded.set(id, entry);
       this.pending.delete(id);
@@ -117,7 +118,7 @@ export class City {
       const match = this.matchFor(t);
       if (!match) entry.fallback = true;
       const changed = new Set();
-      this._apply(entry, t.points, match, changed);
+      this._apply(entry, t, match, changed);
       // Blocks this walk finished first (in time order): its "new blocks".
       let n = 0;
       for (const id of changed) {
@@ -134,11 +135,14 @@ export class City {
 
   // Count one walk's points in a neighborhood: along its matched streets, or
   // (no match yet) everything near the GPS line.
-  _apply(entry, points, match, changed) {
+  _apply(entry, track, match, changed) {
+    const { points } = track;
     const pathChanged = new Set();
     if (!match) {
-      entry.engine.addTrack(points, changed);
-      entry.pathEngine.addTrack(points, pathChanged);
+      for (const run of runsOf(track)) {
+        entry.engine.addTrack(run, changed);
+        entry.pathEngine.addTrack(run, pathChanged);
+      }
       return;
     }
     for (const step of match) {
@@ -159,7 +163,7 @@ export class City {
     if (this.matches.has(key)) return this.matches.get(key);
     const need = this.hoodsIn(t.bbox || (t.bbox = bboxOfPoints(t.points)), PAD);
     if (!need.every((id) => this.loaded.has(id))) return null;
-    const match = matchWalk(this.graph, t.points);
+    const match = matchWalk(this.graph, t.points, t.breaks);
     this.matches.set(key, match);
     return match;
   }

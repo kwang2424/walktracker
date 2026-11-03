@@ -54,15 +54,52 @@ final class LocationService: NSObject {
     /// No-tracking areas from the page (your office, home): automatic walks
     /// don't record points inside them. Kept here too, since the page isn't
     /// running when iOS wakes the app in the background.
-    struct Zone: Codable { let lat: Double; let lon: Double; let r: Double }
+    /// A circle (r meters around lat/lon) or one city block (`ring` of
+    /// [lat, lon] points traced along its streets, plus `pad` meters of slack).
+    struct Zone: Codable {
+        let lat: Double
+        let lon: Double
+        let r: Double
+        var ring: [[Double]]? = nil
+        var pad: Double? = nil
+
+        func contains(_ l: CLLocation) -> Bool {
+            guard let ring, ring.count >= 3 else {
+                return l.distance(from: CLLocation(latitude: lat, longitude: lon)) <= r
+            }
+            // Flat meters around the block, good to well under a meter at this size.
+            let k = cos(lat * .pi / 180) * 111_320
+            let p = ((l.coordinate.longitude - lon) * k, (l.coordinate.latitude - lat) * 111_320)
+            let pts = ring.map { (($0[1] - lon) * k, ($0[0] - lat) * 111_320) }
+            var inside = false
+            var j = pts.count - 1
+            for i in 0..<pts.count {
+                let (xi, yi) = pts[i], (xj, yj) = pts[j]
+                if (yi > p.1) != (yj > p.1), p.0 < (xj - xi) * (p.1 - yi) / (yj - yi) + xi { inside.toggle() }
+                j = i
+            }
+            if inside { return true }
+            let slack = pad ?? 8
+            for i in 1..<pts.count {
+                let (ax, ay) = pts[i - 1], (bx, by) = pts[i]
+                let dx = bx - ax, dy = by - ay
+                let l2 = dx * dx + dy * dy
+                let t = l2 > 0 ? max(0, min(1, ((p.0 - ax) * dx + (p.1 - ay) * dy) / l2)) : 0
+                if hypot(ax + t * dx - p.0, ay + t * dy - p.1) <= slack { return true }
+            }
+            return false
+        }
+    }
     var zones: [Zone] {
         get { (UserDefaults.standard.data(forKey: "zones")).flatMap { try? JSONDecoder().decode([Zone].self, from: $0) } ?? [] }
         set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: "zones"); zoneCache = newValue }
     }
     private lazy var zoneCache: [Zone] = zones
 
+    private var zoneGap = false
+
     private func inZone(_ l: CLLocation) -> Bool {
-        zoneCache.contains { l.distance(from: CLLocation(latitude: $0.lat, longitude: $0.lon)) <= $0.r }
+        zoneCache.contains { $0.contains(l) }
     }
 
     private(set) var autoTrack: Bool {
@@ -317,9 +354,13 @@ final class LocationService: NSObject {
             if !watches.isEmpty { journal.queue(point) }
             guard Self.usable(location) else { continue }
             lastGoodFixAt = Date()
-            if inZone(location) { continue } // a no-tracking area: nothing counts here
+            if inZone(location) { zoneGap = true; continue } // a no-tracking area: nothing counts here
             if !watches.isEmpty { WalkActivity.shared.add(location, steps: steps) }
-            if journal.current != nil && !inVehicle { journal.append(point) }
+            if journal.current != nil && !inVehicle {
+                var p = point
+                if zoneGap { p.gap = true; zoneGap = false } // don't join across the area
+                journal.append(p)
+            }
         }
         if let fix = lastFix, !currentRequests.isEmpty, fix.horizontalAccuracy < 100 {
             for id in currentRequests { deliverCurrent?(id, TrackPoint(fix)) }

@@ -11,6 +11,8 @@ struct TrackPoint: Codable {
     /// Steps counted by the phone since GPS was turned on for this walk (nil if
     /// the pedometer isn't available). Moving far with no new steps = riding.
     var steps: Int?
+    /// Points were skipped just before this one (a no-tracking area).
+    var gap: Bool?
 
     init(_ location: CLLocation, steps: Int? = nil) {
         lat = location.coordinate.latitude

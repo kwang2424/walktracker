@@ -113,7 +113,9 @@ export class Places {
     for (const t of [...tracks].sort((x, y) => x.startedAt - y.startedAt)) {
       const pts = t.points;
       if (pts.length === 1) for (const item of this.near(pts[0])) if (!seen.has(item.key)) seen.set(item.key, pts[0][2] || t.startedAt);
+      const breaks = new Set(t.breaks || []);
       for (let i = 1; i < pts.length; i++) {
+        if (breaks.has(i)) continue; // a gap (e.g. a no-tracking area): don't join across it
         for (const item of this.passed(pts[i - 1], pts[i])) {
           if (!seen.has(item.key)) seen.set(item.key, pts[i][2] || t.startedAt);
         }

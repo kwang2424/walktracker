@@ -9,7 +9,8 @@ import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { Places, ROUTE_COLORS } from './places.js';
 import { drawBadge } from './placeicons.js';
 import { LiveFilter, isRiding } from './track.js';
-import { ZONE_SIZES, inZone, withoutZones } from './zones.js';
+import { ZONE_SIZES, BLOCK_PAD, inZone, withoutZones, runsOf } from './zones.js';
+import { blockAround } from './blockface.js';
 import { walkDetails, formatPace, trimWalk, untrimWalk } from './walkstats.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, overrideWalked } from './city.js';
@@ -220,7 +221,7 @@ function zoned(list) {
 }
 
 function drawTracks() {
-  view.setTracks(zoned(tracks).map((t) => t.points));
+  view.setTracks(zoned(tracks).flatMap(runsOf));
   drawHeat();
   view.setTracksVisible(settings.showTracks);
 }
@@ -609,6 +610,7 @@ function onPosition(pos) {
     return;
   }
   if (inZone(p, settings.zones)) {
+    rec.zoneGap = true; // the walk resumes after the area without joining across it
     setGps('weak', 'In a no-tracking area: not recorded');
     return;
   }
@@ -631,7 +633,12 @@ function onPosition(pos) {
   const smooth = (rec.filter ||= new LiveFilter()).push(raw);
   if (!smooth) return;
   p = smooth.slice(0, 3);
-  const last = rec.points[rec.points.length - 1];
+  let last = rec.points[rec.points.length - 1];
+  if (rec.zoneGap && last) {
+    rec.zoneGap = false;
+    (rec.track.breaks ||= []).push(rec.points.length);
+    last = null;
+  }
   if (last && haversine(last, p) < MIN_STEP_M) return;
   rec.points.push(p);
   if (!asleep()) view.setLive(rec.points);
@@ -1654,7 +1661,7 @@ function renderSettings() {
 
 // ---------------------------------------------------------------- no-tracking areas
 const sizeLabel = (r) => (ZONE_SIZES.find((s) => s.r === r)?.label || `${r} m`).toLowerCase();
-let zoneDraft = null; // { r } while placing a new area
+let zoneDraft = null; // { shape: 'circle' | 'block', r, ring? } while placing a new area
 
 function renderZones() {
   const list = $('#zone-list');
@@ -1664,7 +1671,7 @@ function renderZones() {
     row.className = 'setting';
     row.innerHTML = '<span><b></b><small></small></span><button class="act">Remove</button>';
     row.querySelector('b').textContent = z.name;
-    row.querySelector('small').textContent = `${sizeLabel(z.r)} · ${Math.round(z.r)} m around`;
+    row.querySelector('small').textContent = z.ring ? 'one block' : `${sizeLabel(z.r)} · ${Math.round(z.r)} m around`;
     row.querySelector('b').addEventListener('click', () => { closeSheet(); view.setView([z.lat, z.lon], 16); });
     row.querySelector('button').addEventListener('click', () => removeZone(z.id));
     list.append(row);
@@ -1672,20 +1679,26 @@ function renderZones() {
 }
 
 function drawZones() {
-  view?.setZones(settings.zones, zoneDraft && { ...zoneDraft, lat: view.getCenter()[0], lon: view.getCenter()[1] });
+  const preview = !zoneDraft ? null
+    : zoneDraft.shape === 'block' ? (zoneDraft.ring ? { ring: zoneDraft.ring, lat: zoneDraft.ring[0][0] } : null)
+      : { r: zoneDraft.r, lat: view.getCenter()[0], lon: view.getCenter()[1] };
+  view?.setZones(settings.zones, preview);
 }
 
 // The map, and the iPhone app (which leaves these areas out of automatic walks).
 function syncZones() {
   drawZones();
-  native?.call('setZones', { zones: settings.zones.map(({ lat, lon, r }) => ({ lat, lon, r })) }).catch(() => {});
+  native?.call('setZones', {
+    zones: settings.zones.map(({ lat, lon, r, ring, pad }) => (ring ? { lat, lon, r: 0, ring, pad: pad ?? BLOCK_PAD } : { lat, lon, r })),
+  }).catch(() => {});
 }
 
 function startZoneDraft() {
   closeSheet();
-  zoneDraft = { r: ZONE_SIZES[1].r };
+  zoneDraft = { shape: 'circle', r: ZONE_SIZES[1].r };
   $('#zone-name').value = '';
   renderZoneSizes();
+  setZoneShape('circle');
   $('#zone-edit').hidden = false;
   // Center the circle in the part of the map the card doesn't cover.
   const covered = $('#zone-edit').getBoundingClientRect();
@@ -1694,21 +1707,52 @@ function startZoneDraft() {
   drawZones();
 }
 
+// Circle: follows the middle of the map. Block: tap a block to pick it.
+function setZoneShape(shape) {
+  zoneDraft.shape = shape;
+  document.querySelectorAll('#zone-shape button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.shape === shape));
+  $('#zone-size').hidden = shape === 'block';
+  $('#zone-hint').textContent = shape === 'block'
+    ? (zoneDraft.ring ? 'Got it. Tap another block to change it.' : 'Tap your block on the map. Zoom in close if it’s small.')
+    : 'Move the map so the circle covers the place.';
+  view.onPick = shape === 'block' ? pickZoneBlock : null;
+  $('#zone-save').disabled = shape === 'block' && !zoneDraft.ring;
+  drawZones();
+}
+
+function pickZoneBlock(latlon) {
+  const ring = blockAround(city.graph, latlon);
+  if (!ring) return toast('No block there (a park or the edge of the map?). Try a circle instead.', 3500);
+  zoneDraft.ring = ring;
+  setZoneShape('block');
+}
+
 function renderZoneSizes() {
   document.querySelectorAll('#zone-size button').forEach((b) => b.setAttribute('aria-pressed', Number(b.dataset.r) === zoneDraft?.r));
 }
 
 function endZoneDraft() {
   zoneDraft = null;
+  view.onPick = null;
   $('#zone-edit').hidden = true;
   view.map.setPadding({ top: 0, left: 0, right: 0, bottom: 0 });
   drawZones();
 }
 
 async function saveZone() {
-  const [lat, lon] = view.getCenter();
   const name = $('#zone-name').value.trim() || `Area ${settings.zones.length + 1}`;
-  settings.zones = [...settings.zones, { id: Date.now().toString(36), name, lat: +lat.toFixed(6), lon: +lon.toFixed(6), r: zoneDraft.r }];
+  const id = Date.now().toString(36);
+  let zone;
+  if (zoneDraft.shape === 'block') {
+    if (!zoneDraft.ring) return toast('Tap your block on the map first.');
+    const ring = zoneDraft.ring.map(([la, lo]) => [+la.toFixed(6), +lo.toFixed(6)]);
+    const lat = ring.reduce((s, p) => s + p[0], 0) / ring.length, lon = ring.reduce((s, p) => s + p[1], 0) / ring.length;
+    zone = { id, name, lat: +lat.toFixed(6), lon: +lon.toFixed(6), ring, pad: BLOCK_PAD };
+  } else {
+    const [lat, lon] = view.getCenter();
+    zone = { id, name, lat: +lat.toFixed(6), lon: +lon.toFixed(6), r: zoneDraft.r };
+  }
+  settings.zones = [...settings.zones, zone];
   saveSettings();
   endZoneDraft();
   syncZones();
@@ -1978,6 +2022,7 @@ $('#wd-trim-undo').addEventListener('click', undoTrim);
 $('#btn-zone-add').addEventListener('click', startZoneDraft);
 $('#zone-cancel').addEventListener('click', endZoneDraft);
 $('#zone-save').addEventListener('click', saveZone);
+document.querySelectorAll('#zone-shape button').forEach((b) => b.addEventListener('click', () => setZoneShape(b.dataset.shape)));
 document.querySelectorAll('#zone-size button').forEach((b) => b.addEventListener('click', () => {
   zoneDraft.r = Number(b.dataset.r);
   renderZoneSizes();

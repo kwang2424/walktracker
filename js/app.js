@@ -10,6 +10,7 @@ import { Places, ROUTE_COLORS } from './places.js';
 import { drawBadge } from './placeicons.js';
 import { LiveFilter, isRiding } from './track.js';
 import { ZONE_SIZES, inZone, withoutZones } from './zones.js';
+import { walkDetails, formatPace, trimWalk, untrimWalk } from './walkstats.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, overrideWalked } from './city.js';
 import { KeepAwake, isIOS } from './awake.js';
@@ -30,7 +31,7 @@ const $ = (sel) => document.querySelector(sel);
 
 // ---------------------------------------------------------------- settings
 const SETTINGS_KEY = 'walktracker.settings';
-const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true, hudScope: 'hood', showLandmarks: true, showStations: true, zones: [] };
+const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true, hudScope: 'hood', showLandmarks: true, showStations: true, showHeatmap: false, zones: [] };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch { /* private mode */ }
 if (settings.detailedMap) settings.mapTheme = 'default'; // older setting
 delete settings.detailedMap;
@@ -138,6 +139,7 @@ const view = token && mapLibLoaded ? new MapView($('#map'), {
   onAuthError: (status) => showSetup(`Mapbox didn’t accept this token (error ${status}). Check that it’s copied fully, and if it has URL restrictions, that they include ${location.origin + location.pathname.replace(/index\.html$/, '')}`),
 }) : null;
 view?.setPlaceKinds({ landmark: settings.showLandmarks, station: settings.showStations });
+view?.setHeatVisible(settings.showHeatmap);
 queueMicrotask(() => renderLegend());
 
 function applyMapStyle() {
@@ -219,6 +221,7 @@ function zoned(list) {
 
 function drawTracks() {
   view.setTracks(zoned(tracks).map((t) => t.points));
+  drawHeat();
   view.setTracksVisible(settings.showTracks);
 }
 
@@ -1488,12 +1491,114 @@ function renderWalks() {
         tracks = tracks.filter((x) => x !== t);
         await rebuild();
       }]],
-      onOpen: () => {
-        closeSheet();
-        view.fitPoints(t.points);
-      },
+      onOpen: () => openWalkDetail(t),
     }));
   }
+}
+
+// ---------------------------------------------------------------- heatmap
+// Every walk's points about every 10 m (no-tracking areas left out), so busy
+// streets glow and one-off walks stay faint. Built only while it's shown.
+function drawHeat() {
+  if (!view || !settings.showHeatmap) return;
+  const pts = [];
+  for (const t of zoned(tracks)) {
+    let last = null;
+    for (const p of t.points) {
+      if (last && haversine(last, p) < 10) continue;
+      pts.push(p);
+      last = p;
+    }
+  }
+  view.setHeat(pts);
+}
+
+// ---------------------------------------------------------------- one walk
+let walkOpen = null; // { track, i0, i1 } while the details card is up
+
+function openWalkDetail(t) {
+  closeSheet();
+  $('#summary').hidden = true;
+  const base = t.original || t.points;
+  const [i0, i1] = t.trim || [0, base.length - 1];
+  walkOpen = { track: t, i0, i1 };
+  const d = walkDetails(t.points);
+  const n = city.newByTrack.get(t.id) || 0;
+  $('#wd-title').textContent = new Date(t.startedAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  $('#wd-dist').textContent = km(d.distance);
+  $('#wd-moving').textContent = minutes(d.movingMs);
+  $('#wd-pace').textContent = formatPace(d.pace);
+  $('#wd-sub').textContent = [`${minutes(d.totalMs)} in all`, `${n} new block${n === 1 ? '' : 's'}`, SOURCE_LABEL[t.source] || '', t.original ? 'trimmed' : '']
+    .filter(Boolean).join(' · ');
+  // Splits: a bar per kilometer, longer = slower.
+  const splits = $('#wd-splits');
+  splits.replaceChildren();
+  const paces = d.splits.map((s) => s.ms / (s.full ? 1 : s.meters / 1000));
+  const slowest = Math.max(...paces, 1);
+  d.splits.forEach((s, i) => {
+    const el = document.createElement('div');
+    el.className = 'wd-split';
+    el.innerHTML = '<span></span><div class="bar"><div></div></div><span></span>';
+    el.children[0].textContent = s.full ? `km ${s.km}` : `${(s.meters / 1000).toFixed(2)} km`;
+    el.querySelector('.bar div').style.width = `${Math.round((100 * paces[i]) / slowest)}%`;
+    el.children[2].textContent = formatPace(paces[i]);
+    splits.append(el);
+  });
+  // Trim sliders over the original points.
+  const max = base.length - 1;
+  $('#wd-start').max = $('#wd-end').max = max;
+  $('#wd-start').value = i0;
+  $('#wd-end').value = i1;
+  $('#wd-trim-undo').hidden = !t.original;
+  $('#walk-detail').hidden = false;
+  previewTrim();
+  view.fitPoints(base, { bottom: Math.min(innerHeight * 0.55, $('#walk-detail').getBoundingClientRect().height + 40) });
+}
+
+function previewTrim() {
+  if (!walkOpen) return;
+  const base = walkOpen.track.original || walkOpen.track.points;
+  let i0 = Number($('#wd-start').value), i1 = Number($('#wd-end').value);
+  if (i1 - i0 < 1) { // keep at least two points
+    if (document.activeElement === $('#wd-start')) i0 = Math.max(0, i1 - 1); else i1 = Math.min(base.length - 1, i0 + 1);
+    $('#wd-start').value = i0;
+    $('#wd-end').value = i1;
+  }
+  Object.assign(walkOpen, { i0, i1 });
+  view.setTrim(base, i0, i1);
+  const kept = polylineLength(base.slice(i0, i1 + 1));
+  const at = (p) => (p[2] ? new Date(p[2]).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '');
+  $('#wd-trim-info').textContent = `Keeps ${km(kept)} of ${km(polylineLength(base))} · ${at(base[i0])} to ${at(base[i1])}`;
+  const [t0, t1] = walkOpen.track.trim || [0, base.length - 1];
+  $('#wd-trim-save').disabled = i0 === t0 && i1 === t1;
+}
+
+function closeWalkDetail() {
+  walkOpen = null;
+  $('#walk-detail').hidden = true;
+  view.setTrim([], 0, 0);
+}
+
+async function saveWalk(next) {
+  await db.put('tracks', next);
+  tracks = tracks.map((x) => (x.id === next.id ? next : x));
+  await rebuild();
+  openWalkDetail(next);
+}
+
+async function saveTrim() {
+  if (!walkOpen) return;
+  const { track, i0, i1 } = walkOpen;
+  const base = track.original || track.points;
+  const next = i0 === 0 && i1 === base.length - 1 ? untrimWalk(track) : trimWalk(track, i0, i1);
+  await saveWalk(next);
+  toast('Walk trimmed: blocks recounted', 2500);
+}
+
+async function undoTrim() {
+  if (!walkOpen?.track.original) return;
+  await saveWalk(untrimWalk(walkOpen.track));
+  toast('Trim undone', 2000);
 }
 
 // Neighborhoods grouped by borough, most-walked first.
@@ -1795,6 +1900,7 @@ function onSettingChange(key, value) {
   saveSettings();
   if (key === 'mapTheme') { applyMapStyle(); renderSettings(); }
   if (key === 'showTracks') drawTracks();
+  if (key === 'showHeatmap') { view?.setHeatVisible(value); drawHeat(); }
   if (key === 'showLandmarks' || key === 'showStations') {
     view?.setPlaceKinds({ landmark: settings.showLandmarks, station: settings.showStations });
     renderLegend();
@@ -1864,6 +1970,11 @@ $('#street-search').addEventListener('input', renderStreets);
 $('#hood-search').addEventListener('input', renderHoods);
 $('#btn-resume').addEventListener('click', () => resumable && startWalk(resumable));
 $('#sum-next').addEventListener('click', showNextSummary);
+$('#wd-close').addEventListener('click', closeWalkDetail);
+$('#wd-start').addEventListener('input', previewTrim);
+$('#wd-end').addEventListener('input', previewTrim);
+$('#wd-trim-save').addEventListener('click', saveTrim);
+$('#wd-trim-undo').addEventListener('click', undoTrim);
 $('#btn-zone-add').addEventListener('click', startZoneDraft);
 $('#zone-cancel').addEventListener('click', endZoneDraft);
 $('#zone-save').addEventListener('click', saveZone);

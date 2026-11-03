@@ -136,6 +136,15 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .notice-actions { display: flex; gap: 8px; }
 .notice-actions .btn { flex: 1; height: 44px; }
 .summary { z-index: 1060; }
+.walkcard { z-index: 1055; max-height: calc(100dvh - 200px - var(--safe-top) - var(--safe-bottom)); overflow-y: auto; }
+.walkcard .act { font-size: 13px; font-weight: 600; color: var(--muted); padding: 4px 8px; }
+.wd-splits { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 10px; font-size: 13px; }
+.wd-split { display: grid; grid-template-columns: 54px 1fr 44px; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+.wd-split .bar { height: 8px; border-radius: 4px; background: var(--surface); overflow: hidden; }
+.wd-split .bar div { height: 100%; border-radius: 4px; background: var(--track); }
+#wd-trim summary { font-weight: 600; color: var(--accent); cursor: pointer; padding: 6px 0; }
+.wd-range { display: grid; grid-template-columns: 44px 1fr; align-items: center; gap: 8px; margin: 6px 0; font-size: 13px; }
+.wd-range input { width: 100%; accent-color: var(--accent); }
 #zone-edit .segmented { margin: 10px 0 12px; }
 .text-input { width: 100%; font: inherit; font-size: 16px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
 #zone-list .setting b { cursor: pointer; }

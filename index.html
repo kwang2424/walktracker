@@ -93,6 +93,28 @@
     </div>
   </section>
 
+  <!-- One walk: details, splits, and trimming its start or end -->
+  <section id="walk-detail" class="card notice walkcard" hidden>
+    <div class="sum-head"><b id="wd-title"></b><button id="wd-close" class="act">Close</button></div>
+    <div class="sum-stats">
+      <div><span id="wd-dist"></span><small>distance</small></div>
+      <div><span id="wd-moving"></span><small>moving</small></div>
+      <div><span id="wd-pace"></span><small>min/km</small></div>
+    </div>
+    <p class="muted small" id="wd-sub"></p>
+    <div class="wd-splits" id="wd-splits"></div>
+    <details id="wd-trim">
+      <summary>Trim the start or end</summary>
+      <label class="wd-range"><span>Start</span><input type="range" id="wd-start" min="0" max="1000" value="0"></label>
+      <label class="wd-range"><span>End</span><input type="range" id="wd-end" min="0" max="1000" value="1000"></label>
+      <p class="muted small" id="wd-trim-info"></p>
+      <div class="notice-actions">
+        <button id="wd-trim-undo" class="btn btn-ghost" hidden>Undo trim</button>
+        <button id="wd-trim-save" class="btn btn-primary">Save trim</button>
+      </div>
+    </details>
+  </section>
+
   <!-- After a walk (automatic ones: when the app next opens) -->
   <section id="summary" class="card notice summary" hidden aria-live="polite">
     <div class="sum-head"><b id="sum-title">Walk saved</b><span class="muted small" id="sum-when"></span></div>
@@ -305,6 +327,8 @@
         </div>
         <label class="setting"><span><b>Show walk lines</b><small>Draw the GPS line of every walk.</small></span>
           <input type="checkbox" class="switch" data-setting="showTracks"></label>
+        <label class="setting"><span><b>Show heatmap</b><small>Where you walk most: blue once, glowing yellow to red for your regular routes.</small></span>
+          <input type="checkbox" class="switch" data-setting="showHeatmap"></label>
         <label class="setting"><span><b>Show landmarks</b><small>Gold badges for NYC landmarks, filled once you’ve walked by.</small></span>
           <input type="checkbox" class="switch" data-setting="showLandmarks"></label>
         <label class="setting"><span><b>Show subway stations</b><small>Purple badges for every station, filled once you’ve passed one.</small></span>

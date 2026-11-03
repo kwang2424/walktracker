@@ -48,6 +48,9 @@ export class MapView {
     this.hoodLit = null;
     this.placesData = collection([]);
     this.zonesData = collection([]);
+    this.heatData = collection([]);
+    this.heatVisible = false;
+    this.trimData = collection([]);
     this.placeVisited = new Map(); // place index -> true
     this.popup = null;
     this.me = null;
@@ -196,6 +199,30 @@ export class MapView {
     m.addLayer({
       id: 'blocks-hit', type: 'line', source: 'blocks', layout: round, minzoom: BLOCKS_MIN_ZOOM,
       paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 22 },
+    });
+    // Personal heatmap: blue where you've walked once, glowing yellow to red
+    // where you walk all the time (points every ~10 m from every walk).
+    m.addSource('heat', { type: 'geojson', data: this.heatData });
+    add({
+      id: 'heat', type: 'heatmap', source: 'heat', layout: { visibility: this.heatVisible ? 'visible' : 'none' },
+      paint: {
+        'heatmap-weight': 1,
+        'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 10, 0.25, 14, 0.6, 17, 1.2],
+        'heatmap-radius': ['interpolate', ['exponential', 1.7], ['zoom'], 10, 2, 14, 6, 16, 12, 19, 40],
+        'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
+          0, 'rgba(0,0,0,0)', 0.05, 'rgba(37,99,235,0.35)', 0.25, 'rgba(37,99,235,0.8)', 0.5, '#06b6d4', 0.75, '#facc15', 1, '#ef4444'],
+        'heatmap-opacity': 0.85,
+      },
+    });
+    // Trimming a walk: the part kept, and the parts being cut off.
+    m.addSource('trim', { type: 'geojson', data: this.trimData });
+    add({
+      id: 'trim-cut', type: 'line', source: 'trim', layout: round, filter: ['==', ['get', 'cut'], 1],
+      paint: { 'line-color': '#9ca3af', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 2.5, 17, 5], 'line-opacity': 0.8, 'line-dasharray': [1, 1.6], 'line-emissive-strength': 1 },
+    });
+    add({
+      id: 'trim', type: 'line', source: 'trim', layout: round, filter: ['==', ['get', 'cut'], 0],
+      paint: { 'line-color': c.track, 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 17, 6], 'line-opacity': 0.95, 'line-emissive-strength': 1 },
     });
     // No-tracking areas: a light shaded circle with a dashed edge; the one
     // being placed is drawn in the accent color.
@@ -418,6 +445,26 @@ export class MapView {
     this.map.getSource('tracks')?.setData(this.tracksData);
   }
 
+  // Heatmap points: [[lat, lon]].
+  setHeat(points) {
+    this.heatData = collection(points.map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: ll(p) } })));
+    this.map.getSource('heat')?.setData(this.heatData);
+  }
+
+  setHeatVisible(on) {
+    this.heatVisible = on;
+    if (this.map.getLayer('heat')) this.map.setLayoutProperty('heat', 'visibility', on ? 'visible' : 'none');
+  }
+
+  // A walk being trimmed: points [[lat, lon]], keeping indexes i0..i1.
+  setTrim(points, i0, i1) {
+    const line = (pts, cut) => (pts.length > 1 ? [{ type: 'Feature', properties: { cut }, geometry: { type: 'LineString', coordinates: pts.map(ll) } }] : []);
+    this.trimData = collection(points.length ? [
+      ...line(points.slice(0, i0 + 1), 1), ...line(points.slice(i1), 1), ...line(points.slice(i0, i1 + 1), 0),
+    ] : []);
+    this.map.getSource('trim')?.setData(this.trimData);
+  }
+
   setTracksVisible(on) {
     this.tracksVisible = on;
     if (this.map.getLayer('tracks')) this.map.setLayoutProperty('tracks', 'visibility', on ? 'visible' : 'none');
@@ -466,7 +513,7 @@ export class MapView {
   }
 
   // Fit a list of [lat, lon] points on screen, clear of the cards and buttons.
-  fitPoints(points, { maxZoom = 17, animate = true } = {}) {
+  fitPoints(points, { maxZoom = 17, animate = true, bottom = null } = {}) {
     if (!points.length) return;
     let s = Infinity, w = Infinity, n = -Infinity, e = -Infinity;
     for (const p of points) {
@@ -476,7 +523,7 @@ export class MapView {
     const h = this.map.getContainer().clientHeight;
     const pad = Math.min(40, h / 10);
     this.map.fitBounds([[w, s], [e, n]], {
-      padding: { top: Math.min(140, h / 4), bottom: Math.min(120, h / 4), left: pad, right: pad },
+      padding: { top: Math.min(140, h / 4), bottom: bottom ?? Math.min(120, h / 4), left: pad, right: pad },
       maxZoom, animate, duration: 600,
     });
   }

@@ -351,9 +351,10 @@ async function load() {
   view.setHoods(outlines);
   places = await fetch(city.url('places.json')).then((r) => r.json()).then((d) => new Places(d)).catch(() => null);
   if (places) view.setPlaces(places.items);
-  await importNativeWalks();
+  const autoWalks = await importNativeWalks();
   if (settings.healthAuto) await importHealth({ quiet: true });
   await rebuild();
+  queueWalkSummaries(autoWalks);
   if (resumable) showResumeCard(resumable);
   else centerOnMe({ quiet: true });
   maybeShowInstallTip();
@@ -391,8 +392,9 @@ async function finishResumable() {
   resumable = null;
   $('#resume').hidden = true;
   await finishTrack(t);
-  renderStats();
-  toast(`Walk saved · ${km(t.distance)}`, 3000);
+  if (!tracks.includes(t)) tracks = [...tracks.filter((x) => x.id !== t.id), t];
+  await rebuild();
+  queueWalkSummaries([t]);
 }
 
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
@@ -549,6 +551,8 @@ async function startWalk(resume = null) {
   $('#btn-pocket').hidden = false;
   $('#btn-record-label').textContent = 'Finish';
   setGps('wait', 'Finding GPS…');
+  // Lock Screen / Dynamic Island card (iPhone app).
+  native?.call('walkActivity', { action: 'start', startedAt: rec.track.startedAt, distance: rec.dist || 0 }).catch(() => {});
   renderStats();
   tick();
   armAutoDark();
@@ -626,6 +630,7 @@ function onPosition(pos) {
       }
       queueRestyle(changed);
       updateStats();
+      updateWalkActivity();
     }
   }
   if (!asleep() && Date.now() - lastDrag > 20000 && view.isNearEdge(p)) {
@@ -721,6 +726,11 @@ function saveRec() {
   return db.put('tracks', rec.track);
 }
 
+// Keep the Lock Screen card's distance in step with the page (iPhone app).
+const updateWalkActivity = throttle(() => {
+  if (rec && native) native.call('walkActivity', { action: 'update', distance: rec.dist, newBlocks: rec.newBlocks.size }).catch(() => {});
+}, 10000);
+
 async function stopWalk() {
   if (!rec) return;
   const r = rec;
@@ -742,6 +752,7 @@ async function stopWalk() {
   $('#btn-pocket').hidden = true;
   $('#btn-record-label').textContent = 'Start walk';
   if (r.points.length < 2) {
+    native?.call('walkActivity', { action: 'discard' }).catch(() => {});
     await db.delete('tracks', r.track.id);
     renderStats();
     toast('Walk discarded: no GPS points were recorded.', 3500);
@@ -756,12 +767,104 @@ async function stopWalk() {
   });
   await db.put('tracks', r.track);
   tracks.push(r.track);
-  city.setTracks(tracks); // replays loaded neighborhoods with the saved walk
+  // Replays loaded neighborhoods with the saved walk, map-matched (js/match.js).
+  await city.ensure(city.setTracks(tracks)).catch(() => {});
+  city.refreshMatches();
   drawTracks();
+  drawBlocks();
+  updatePlaceVisits();
   renderStats();
-  // Counted from the whole saved walk, so a continued walk includes its first part too.
-  const n = city.newByTrack.get(r.track.id) ?? r.newBlocks.size;
-  toast(`Walk saved · ${km(r.dist)} · ${n} new block${n === 1 ? '' : 's'}`, 4000);
+  native?.call('walkActivity', { action: 'end', distance: r.dist, newBlocks: city.newByTrack.get(r.track.id) ?? r.newBlocks.size }).catch(() => {});
+  queueWalkSummaries([r.track]);
+}
+
+// ---------------------------------------------------------------- walk summary
+// A card after each walk: distance, time, new blocks, streets finished,
+// neighborhood progress and landmarks or stations collected. Walks recorded
+// automatically get one when the app next opens.
+const summaryQueue = [];
+let summaryShown = null;
+
+function queueWalkSummaries(list) {
+  summaryQueue.push(...list.filter((t) => t.points?.length > 1));
+  if (!summaryShown) showNextSummary();
+}
+
+async function showNextSummary() {
+  if (summaryShown) view.highlight(summaryShown.ids, false);
+  const t = summaryQueue.shift();
+  summaryShown = t ? await walkSummary(t) : null;
+  $('#summary').hidden = !summaryShown;
+  if (!summaryShown) return;
+  const s = summaryShown;
+  const when = new Date(t.startedAt);
+  $('#sum-title').textContent = t.source === 'auto' ? 'Walk recorded' : 'Walk saved';
+  $('#sum-when').textContent = `${when.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} · ` +
+    `${when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}${t.source === 'auto' ? ' · automatic' : ''}`;
+  $('#sum-dist').textContent = km(t.distance || 0);
+  $('#sum-time').textContent = minutes(t.duration ?? (t.endedAt - t.startedAt));
+  $('#sum-blocks').textContent = s.ids.length.toLocaleString();
+  const lines = $('#sum-lines');
+  lines.replaceChildren();
+  const line = (icon, text) => {
+    const li = document.createElement('li');
+    if (icon instanceof HTMLElement) li.append(icon); else li.append(Object.assign(document.createElement('span'), { className: 'sum-ic', textContent: icon }));
+    li.append(Object.assign(document.createElement('span'), { textContent: text }));
+    lines.append(li);
+  };
+  for (const st of s.finished.slice(0, 3)) line('🏁', `Finished ${st}`);
+  for (const h of s.hoods.slice(0, 3)) line('▲', `${h.name}: +${fmtPct(h.gain)} (now ${fmtPct(h.now)})`);
+  for (const p of s.places.slice(0, 4)) {
+    const img = Object.assign(document.createElement('img'), { className: 'badge-ic', alt: '' });
+    img.src = drawBadge(p.kind, true, { dark: mapLook().dark, ratio: 3 }).toDataURL();
+    line(img, p.name);
+  }
+  if (!s.ids.length && !s.places.length) line('·', 'No new blocks this time: every street was already walked.');
+  $('#sum-next').textContent = summaryQueue.length ? `Next (${summaryQueue.length} more)` : 'Done';
+}
+
+const minutes = (ms) => {
+  const m = Math.round(ms / 60000);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+};
+
+async function walkSummary(t) {
+  const ids = [...city.completedAt].filter(([, time]) => time === t.startedAt).map(([id]) => id);
+  // Neighborhoods: how much this walk added, and where they stand now.
+  const byHood = new Map();
+  for (const id of ids) {
+    const b = city.block(id);
+    if (b) byHood.set(b.hood, (byHood.get(b.hood) || 0) + b.length);
+  }
+  const hoods = [...byHood].map(([id, len]) => {
+    const h = lastSummary?.hoods.find((x) => x.id === id);
+    return h && h.length ? { name: h.name, gain: (100 * len) / h.length, now: (100 * h.walkedLength) / h.length } : null;
+  }).filter(Boolean).sort((a, b) => b.gain - a.gain);
+  // Streets this walk finished: every block of the street (NYC-wide) walked.
+  const finished = [];
+  const totals = await loadStreetTotals();
+  if (totals) {
+    const total = new Map(totals.map(([name, borough, blocks]) => [`${name}|${borough}`, blocks]));
+    const walked = city.streetProgress(overrides);
+    const touched = new Set(ids.map((id) => city.block(id)).filter((b) => b?.name).map((b) => `${b.name}|${b.borough}`));
+    for (const key of touched) if (walked.get(key)?.walked >= total.get(key)) finished.push(key.split('|')[0]);
+  }
+  // Landmarks and stations first reached on this walk.
+  const end = t.endedAt || t.points[t.points.length - 1][2] || t.startedAt;
+  const places_ = places ? places.items.filter((item) => {
+    const time = placeVisits.get(item.key);
+    return time != null && time >= t.startedAt && time <= end;
+  }) : [];
+  return { track: t, ids, hoods, finished, places: places_ };
+}
+
+function showSummaryOnMap() {
+  const s = summaryShown;
+  if (!s) return;
+  $('#summary').hidden = true;
+  view.fitPoints(s.track.points.map((p) => [p[0], p[1]]), { maxZoom: 16 });
+  view.highlight(s.ids, true);
+  setTimeout(() => { if (summaryShown === s) $('#summary').hidden = false; }, 4000);
 }
 
 const clock = (ms) => {
@@ -1428,18 +1531,18 @@ function renderSettings() {
 // ---------------------------------------------------------------- iPhone app
 // Walks the phone recorded by itself (app closed or in the background).
 async function importNativeWalks() {
-  if (!native) return 0;
+  if (!native) return [];
   let walks;
-  try { walks = await native.call('takeWalks'); } catch { return 0; }
+  try { walks = await native.call('takeWalks'); } catch { return []; }
   const have = new Set(tracks.map((t) => t.nativeId).filter(Boolean));
-  let added = 0;
+  const added = [];
   for (const w of walks || []) {
     if (have.has(w.id) || w.points.length < 2) continue;
     const t = nativeWalkToTrack(w);
     if (t.points.length < 2) continue; // nothing usable (e.g. all underground)
     t.id = await db.put('tracks', t);
     tracks.push(t);
-    added++;
+    added.push(t);
   }
   // Only now that they're saved here can the phone forget them.
   if (walks?.length) await native.call('ackWalks', { ids: walks.map((w) => w.id) }).catch(() => {});
@@ -1450,10 +1553,10 @@ window.addEventListener('native-walks', async () => {
   if (!city.index) return;
   const added = await importNativeWalks();
   const fromHealth = settings.healthAuto ? await importHealth({ quiet: true, rebuildAfter: false }) : 0;
-  if (!added && !fromHealth) return;
+  if (!added.length && !fromHealth) return;
   await rebuild();
-  toast([added && `Added ${added} walk${added === 1 ? '' : 's'} recorded automatically`,
-    fromHealth && `${fromHealth} from Apple Health`].filter(Boolean).join(' · '), 4000);
+  if (fromHealth) toast(`${fromHealth} walk${fromHealth === 1 ? '' : 's'} added from Apple Health`, 4000);
+  queueWalkSummaries(added);
 });
 
 const SOURCE_LABEL = { gpx: 'imported', auto: 'automatic', health: 'Apple Health' };
@@ -1667,6 +1770,8 @@ document.querySelectorAll('#street-filters button').forEach((b) => b.addEventLis
 $('#street-search').addEventListener('input', renderStreets);
 $('#hood-search').addEventListener('input', renderHoods);
 $('#btn-resume').addEventListener('click', () => resumable && startWalk(resumable));
+$('#sum-next').addEventListener('click', showNextSummary);
+$('#sum-map').addEventListener('click', showSummaryOnMap);
 $('#btn-resume-finish').addEventListener('click', finishResumable);
 $('#btn-install-ok').addEventListener('click', dismissInstallTip);
 $('#opt-autotrack').addEventListener('change', (e) => native?.call('setAutoTrack', { on: e.target.checked }).then(renderNativeStatus));

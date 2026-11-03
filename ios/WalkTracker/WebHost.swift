@@ -64,6 +64,9 @@ final class WebHost: NSObject, ObservableObject {
     func scenePhaseChanged(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            // Ask once (iOS shows the prompt only the first time) so automatic
+            // walks can say "Walk recorded" when they end.
+            if location.autoTrack { WalkNotifier.askPermission() }
             location.flush()
             notifyPage()
         case .background:

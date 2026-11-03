@@ -24,9 +24,10 @@ You need a Mac with **Xcode** (free from the Mac App Store, version 16 or newer)
    (Or on GitHub: **Code → Download ZIP**, unzip, and double-click `ios/WalkTracker.xcodeproj`.)
 2. **Sign in with your Apple ID.** Xcode → Settings → Accounts → **+** → Apple ID. A free Apple ID is fine.
 3. **Pick your signing team.** Click **WalkTracker** at the top of the left sidebar → **Signing & Capabilities**
-   → set **Team** to your name (Personal Team).
+   → set **Team** to your name (Personal Team). Do the same for the **WalkTrackerWidgets** target (pick it
+   in the target list on the left of that screen): it's the Lock Screen / Dynamic Island card.
    If Xcode says the bundle identifier isn't available, change it to something unique, like
-   `io.github.yourname.walktracker`.
+   `io.github.yourname.walktracker`, and the widget's to the same plus `.widgets`.
 4. **Connect your iPhone** with the cable and unlock it. Tap **Trust** if asked.
    On the iPhone, turn on **Settings → Privacy & Security → Developer Mode** (it restarts the phone).
 5. **Pick your iPhone** in the device menu at the top of Xcode, then press **▶ Run**.
@@ -41,6 +42,9 @@ You need a Mac with **Xcode** (free from the Mac App Store, version 16 or newer)
   allow motion access and set location to **Always** (iPhone asks; or Settings → WalkTracker → Location).
 - To bring in past walks: Menu → Settings → **Import walks from Apple Health**, and allow access to Workouts
   and Workout Routes when Apple asks. (Apple Health works with a free Apple ID.)
+- Walks you start with **Start walk** show a running clock, distance and steps on the Lock Screen and in
+  the Dynamic Island. Automatic walks send a "Walk recorded" notification when they end (allow
+  notifications when asked); open the app for a summary card with your new blocks.
 - To keep a copy off the phone: Menu → Settings → **Choose backup folder**, and pick a folder in iCloud
   Drive. After every change the app saves `WalkTracker backup.json` there (plus daily copies in
   `Older backups`, last 10 days). To restore, use **Import backup** and pick that file.
@@ -56,6 +60,10 @@ Apps installed with a free Apple ID stop opening after 7 days. Plug the phone in
 
 Pull the latest code (`git pull` in the `walktracker` folder) and press **▶ Run**.
 
+If `git pull` says your local changes to `project.pbxproj` would be overwritten (Xcode saves your team
+there), run `git checkout -- ios/WalkTracker.xcodeproj/project.pbxproj`, pull again, and pick your team
+again (step 3).
+
 ## How it fits together
 
 | File | What it does |
@@ -66,6 +74,9 @@ Pull the latest code (`git pull` in the `walktracker` folder) and press **▶ Ru
 | `WalkTracker/NativeBridge.swift` | Connects the page to the phone: GPS in place of the browser's, and app commands |
 | `WalkTracker/LocationService.swift` | GPS and motion: walks you start, and automatic walks |
 | `WalkTracker/WalkJournal.swift` | Saves walks recorded in the background until the app takes them |
+| `WalkTracker/WalkActivity.swift` | Lock Screen / Dynamic Island card for a walk, and "Walk recorded" notifications |
+| `WalkTrackerWidgets/` | The widget extension that draws that card |
+| `Shared/WalkActivityAttributes.swift` | What the card shows (used by the app and the widget) |
 | `WalkTracker/BackupFolder.swift` | Automatic backups to a folder you pick once in Files (e.g. iCloud Drive) |
 | `WalkTracker/HealthImporter.swift` | Reads walking workouts and their routes from Apple Health (read-only) |
 | `WalkTracker.entitlements` | Turns on Apple Health access |

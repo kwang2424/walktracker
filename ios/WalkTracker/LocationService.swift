@@ -111,6 +111,7 @@ final class LocationService: NSObject {
     func setAutoTrack(_ on: Bool) {
         autoTrack = on
         if on {
+            WalkNotifier.askPermission() // for "Walk recorded" when an automatic walk ends
             switch manager.authorizationStatus {
             case .notDetermined: manager.requestWhenInUseAuthorization() // then "Always", below
             case .authorizedWhenInUse: manager.requestAlwaysAuthorization()
@@ -205,7 +206,10 @@ final class LocationService: NSObject {
         watchdog?.invalidate()
         watchdog = nil
         offFootSince = nil
-        journal.finishCurrent()
+        if let walk = journal.finishCurrent(), UIApplication.shared.applicationState != .active {
+            // On screen, the page shows its own summary card instead.
+            WalkNotifier.walkRecorded(distance: walk.distance, duration: (walk.endedAt - walk.startedAt) / 1000)
+        }
         updateMode()
         onAutoWalkFinished?()
     }
@@ -299,6 +303,7 @@ final class LocationService: NSObject {
             if !watches.isEmpty { journal.queue(point) }
             guard Self.usable(location) else { continue }
             lastGoodFixAt = Date()
+            if !watches.isEmpty { WalkActivity.shared.add(location, steps: steps) }
             if journal.current != nil && !inVehicle { journal.append(point) }
         }
         if let fix = lastFix, !currentRequests.isEmpty, fix.horizontalAccuracy < 100 {

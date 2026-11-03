@@ -151,6 +151,20 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
             } catch {
                 return (nil, error.localizedDescription)
             }
+        case "walkActivity":
+            // The Lock Screen / Dynamic Island card for a walk started in the app.
+            let distance = (body["distance"] as? NSNumber)?.doubleValue ?? 0
+            let blocks = (body["newBlocks"] as? NSNumber)?.intValue
+            switch body["action"] as? String {
+            case "start":
+                let started = (body["startedAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) } ?? Date()
+                WalkActivity.shared.start(startedAt: started, distance: distance)
+            case "update": WalkActivity.shared.update(distance: distance, newBlocks: blocks)
+            case "end": WalkActivity.shared.end(distance: distance, newBlocks: blocks)
+            case "discard": WalkActivity.shared.end(distance: distance, newBlocks: nil, dismiss: true)
+            default: break
+            }
+            return (true, nil)
         case "openSettings":
             if let url = URL(string: UIApplication.openSettingsURLString) { await UIApplication.shared.open(url) }
             return (true, nil)

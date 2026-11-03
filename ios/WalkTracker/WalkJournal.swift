@@ -77,14 +77,16 @@ final class WalkJournal {
         saveSoon()
     }
 
-    /// Ends the current walk. Very short ones (GPS noise, a few steps) are dropped.
-    func finishCurrent(minDistance: Double = 100) {
-        guard let walk = state.current else { return }
+    /// Ends the current walk and returns it, unless it was very short (GPS
+    /// noise, a few steps), which is dropped.
+    @discardableResult
+    func finishCurrent(minDistance: Double = 100) -> Walk? {
+        guard let walk = state.current else { return nil }
         state.current = nil
-        if walk.points.count >= 2 && walk.distance >= minDistance {
-            state.finished.append(walk)
-        }
+        let kept = walk.points.count >= 2 && walk.distance >= minDistance
+        if kept { state.finished.append(walk) }
         save()
+        return kept ? walk : nil
     }
 
     /// Finished walks the web app hasn't saved yet.

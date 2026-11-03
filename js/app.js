@@ -9,6 +9,7 @@ import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { Places, ROUTE_COLORS } from './places.js';
 import { drawBadge } from './placeicons.js';
 import { LiveFilter, isRiding } from './track.js';
+import { ZONE_SIZES, inZone, withoutZones } from './zones.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, overrideWalked } from './city.js';
 import { KeepAwake, isIOS } from './awake.js';
@@ -29,7 +30,7 @@ const $ = (sel) => document.querySelector(sel);
 
 // ---------------------------------------------------------------- settings
 const SETTINGS_KEY = 'walktracker.settings';
-const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true, hudScope: 'hood', showLandmarks: true, showStations: true };
+const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true, hudScope: 'hood', showLandmarks: true, showStations: true, zones: [] };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch { /* private mode */ }
 if (settings.detailedMap) settings.mapTheme = 'default'; // older setting
 delete settings.detailedMap;
@@ -204,8 +205,20 @@ function renderLegend() {
   }
 }
 
+// Walks as they count: with the parts inside no-tracking areas left out.
+const zonedCache = new WeakMap();
+function zoned(list) {
+  return list.map((t) => {
+    const hit = zonedCache.get(t);
+    if (hit && hit.zones === settings.zones) return hit.track;
+    const track = withoutZones(t, settings.zones);
+    zonedCache.set(t, { zones: settings.zones, track });
+    return track;
+  });
+}
+
 function drawTracks() {
-  view.setTracks(tracks.map((t) => t.points));
+  view.setTracks(zoned(tracks).map((t) => t.points));
   view.setTracksVisible(settings.showTracks);
 }
 
@@ -303,7 +316,7 @@ async function reloadData() {
 
 // Load the neighborhoods your walks and hand-marked blocks are in.
 async function rebuild() {
-  const ids = new Set(city.setTracks(tracks));
+  const ids = new Set(city.setTracks(zoned(tracks)));
   for (const v of Object.values(overrides)) if (v?.hood) ids.add(v.hood);
   drawTracks();
   const missing = [...ids].filter((id) => !city.loaded.has(id));
@@ -320,7 +333,7 @@ async function rebuild() {
 function updatePlaceVisits() {
   if (!places) return;
   const all = rec ? [...tracks, { startedAt: rec.track.startedAt, points: rec.points }] : tracks;
-  placeVisits = places.visits(all);
+  placeVisits = places.visits(zoned(all));
   for (const item of places.items) view.setPlaceVisited(item.index, placeVisits.has(item.key));
 }
 
@@ -351,6 +364,7 @@ async function load() {
   view.setHoods(outlines);
   places = await fetch(city.url('places.json')).then((r) => r.json()).then((d) => new Places(d)).catch(() => null);
   if (places) view.setPlaces(places.items);
+  syncZones();
   const autoWalks = await importNativeWalks();
   if (settings.healthAuto) await importHealth({ quiet: true });
   await rebuild();
@@ -534,7 +548,7 @@ async function startWalk(resume = null) {
     $('#resume').hidden = true;
     tracks = tracks.filter((t) => t !== resume);
     city.startLive(rec.points);
-    city.setTracks(tracks);
+    city.setTracks(zoned(tracks));
     drawTracks();
     drawBlocks();
     view.setLive(rec.points);
@@ -589,6 +603,10 @@ function onPosition(pos) {
   const wifiFix = native && pos.coords.speed == null && accuracy > 20;
   if (accuracy > MIN_ACCURACY_M || wifiFix) {
     setGps('weak', `Weak GPS ±${Math.round(accuracy)} m`);
+    return;
+  }
+  if (inZone(p, settings.zones)) {
+    setGps('weak', 'In a no-tracking area: not recorded');
     return;
   }
   // Moved a long way without taking steps (iPhone app only): a train or bus.
@@ -768,7 +786,7 @@ async function stopWalk() {
   await db.put('tracks', r.track);
   tracks.push(r.track);
   // Replays loaded neighborhoods with the saved walk, map-matched (js/match.js).
-  await city.ensure(city.setTracks(tracks)).catch(() => {});
+  await city.ensure(city.setTracks(zoned(tracks))).catch(() => {});
   city.refreshMatches();
   drawTracks();
   drawBlocks();
@@ -1525,7 +1543,82 @@ function renderSettings() {
   if (native) native.call('healthAvailable').then((ok) => { $('#health-settings').hidden = !ok; }).catch(() => {});
   if (native) renderBackupStatus();
   document.querySelectorAll('#map-theme button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.theme === settings.mapTheme));
+  renderZones();
   renderStorageInfo();
+}
+
+// ---------------------------------------------------------------- no-tracking areas
+const sizeLabel = (r) => (ZONE_SIZES.find((s) => s.r === r)?.label || `${r} m`).toLowerCase();
+let zoneDraft = null; // { r } while placing a new area
+
+function renderZones() {
+  const list = $('#zone-list');
+  list.replaceChildren();
+  for (const z of settings.zones) {
+    const row = document.createElement('div');
+    row.className = 'setting';
+    row.innerHTML = '<span><b></b><small></small></span><button class="act">Remove</button>';
+    row.querySelector('b').textContent = z.name;
+    row.querySelector('small').textContent = `${sizeLabel(z.r)} · ${Math.round(z.r)} m around`;
+    row.querySelector('b').addEventListener('click', () => { closeSheet(); view.setView([z.lat, z.lon], 16); });
+    row.querySelector('button').addEventListener('click', () => removeZone(z.id));
+    list.append(row);
+  }
+}
+
+function drawZones() {
+  view?.setZones(settings.zones, zoneDraft && { ...zoneDraft, lat: view.getCenter()[0], lon: view.getCenter()[1] });
+}
+
+// The map, and the iPhone app (which leaves these areas out of automatic walks).
+function syncZones() {
+  drawZones();
+  native?.call('setZones', { zones: settings.zones.map(({ lat, lon, r }) => ({ lat, lon, r })) }).catch(() => {});
+}
+
+function startZoneDraft() {
+  closeSheet();
+  zoneDraft = { r: ZONE_SIZES[1].r };
+  $('#zone-name').value = '';
+  renderZoneSizes();
+  $('#zone-edit').hidden = false;
+  // Center the circle in the part of the map the card doesn't cover.
+  const covered = $('#zone-edit').getBoundingClientRect();
+  view.map.setPadding({ top: 0, left: 0, right: 0, bottom: Math.max(0, innerHeight - covered.top) });
+  if (view.getZoom() < 15.5) view.setView(view.getCenter(), 16);
+  drawZones();
+}
+
+function renderZoneSizes() {
+  document.querySelectorAll('#zone-size button').forEach((b) => b.setAttribute('aria-pressed', Number(b.dataset.r) === zoneDraft?.r));
+}
+
+function endZoneDraft() {
+  zoneDraft = null;
+  $('#zone-edit').hidden = true;
+  view.map.setPadding({ top: 0, left: 0, right: 0, bottom: 0 });
+  drawZones();
+}
+
+async function saveZone() {
+  const [lat, lon] = view.getCenter();
+  const name = $('#zone-name').value.trim() || `Area ${settings.zones.length + 1}`;
+  settings.zones = [...settings.zones, { id: Date.now().toString(36), name, lat: +lat.toFixed(6), lon: +lon.toFixed(6), r: zoneDraft.r }];
+  saveSettings();
+  endZoneDraft();
+  syncZones();
+  await rebuild();
+  toast(`“${name}” added: walking there won’t count`, 3500);
+}
+
+async function removeZone(id) {
+  const z = settings.zones.find((x) => x.id === id);
+  if (!z || !confirm(`Remove “${z.name}”? Walks there will count again.`)) return;
+  settings.zones = settings.zones.filter((x) => x.id !== id);
+  saveSettings();
+  syncZones();
+  renderZones();
+  await rebuild();
 }
 
 // ---------------------------------------------------------------- iPhone app
@@ -1771,6 +1864,15 @@ $('#street-search').addEventListener('input', renderStreets);
 $('#hood-search').addEventListener('input', renderHoods);
 $('#btn-resume').addEventListener('click', () => resumable && startWalk(resumable));
 $('#sum-next').addEventListener('click', showNextSummary);
+$('#btn-zone-add').addEventListener('click', startZoneDraft);
+$('#zone-cancel').addEventListener('click', endZoneDraft);
+$('#zone-save').addEventListener('click', saveZone);
+document.querySelectorAll('#zone-size button').forEach((b) => b.addEventListener('click', () => {
+  zoneDraft.r = Number(b.dataset.r);
+  renderZoneSizes();
+  syncZones();
+}));
+view?.map.on('move', () => { if (zoneDraft) drawZones(); });
 $('#sum-map').addEventListener('click', showSummaryOnMap);
 $('#btn-resume-finish').addEventListener('click', finishResumable);
 $('#btn-install-ok').addEventListener('click', dismissInstallTip);

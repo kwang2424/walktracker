@@ -77,6 +77,22 @@
     </div>
   </section>
 
+  <!-- Placing a no-tracking area: the circle follows the middle of the map -->
+  <section id="zone-edit" class="card notice" hidden>
+    <b>New no-tracking area</b>
+    <p class="muted">Move the map so the circle covers the place.</p>
+    <input id="zone-name" class="text-input" type="text" placeholder="Name, e.g. Work" autocomplete="off" maxlength="40">
+    <div class="segmented" id="zone-size">
+      <button data-r="100" aria-pressed="false">Small</button>
+      <button data-r="175" aria-pressed="true">Medium</button>
+      <button data-r="300" aria-pressed="false">Large</button>
+    </div>
+    <div class="notice-actions">
+      <button id="zone-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="zone-save" class="btn btn-primary">Save area</button>
+    </div>
+  </section>
+
   <!-- After a walk (automatic ones: when the app next opens) -->
   <section id="summary" class="card notice summary" hidden aria-live="polite">
     <div class="sum-head"><b id="sum-title">Walk saved</b><span class="muted small" id="sum-when"></span></div>
@@ -270,6 +286,13 @@
         <label class="setting"><span><b>Smart GPS</b><small>Turns GPS off when you stop for a while (red light, coffee) and back on when you move.</small></span>
           <input type="checkbox" class="switch" data-setting="smartGps"></label>
       </div>
+      </div>
+
+      <h3>No-tracking areas</h3>
+      <p class="muted small">Walking inside these (your office, home) doesn’t count toward blocks, landmarks or walk lines, and automatic walks don’t record there. Saved walks aren’t changed: remove an area and those parts count again.</p>
+      <div class="group">
+        <div id="zone-list"></div>
+        <button class="setting-btn" id="btn-zone-add">Add an area</button>
       </div>
 
       <h3>Map</h3>

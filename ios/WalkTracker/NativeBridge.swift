@@ -151,6 +151,14 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
             } catch {
                 return (nil, error.localizedDescription)
             }
+        case "setZones":
+            let raw = body["zones"] as? [[String: Any]] ?? []
+            location.zones = raw.compactMap { z in
+                guard let lat = (z["lat"] as? NSNumber)?.doubleValue, let lon = (z["lon"] as? NSNumber)?.doubleValue,
+                      let r = (z["r"] as? NSNumber)?.doubleValue else { return nil }
+                return LocationService.Zone(lat: lat, lon: lon, r: r)
+            }
+            return (true, nil)
         case "walkActivity":
             // The Lock Screen / Dynamic Island card for a walk started in the app.
             let distance = (body["distance"] as? NSNumber)?.doubleValue ?? 0

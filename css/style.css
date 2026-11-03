@@ -136,6 +136,9 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .notice-actions { display: flex; gap: 8px; }
 .notice-actions .btn { flex: 1; height: 44px; }
 .summary { z-index: 1060; }
+#zone-edit .segmented { margin: 10px 0 12px; }
+.text-input { width: 100%; font: inherit; font-size: 16px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+#zone-list .setting b { cursor: pointer; }
 .sum-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .sum-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 12px 0 8px; }
 .sum-stats div { background: var(--surface); border-radius: 12px; padding: 8px 10px; display: flex; flex-direction: column; }

@@ -51,6 +51,20 @@ final class LocationService: NSObject {
     private enum Mode { case off, idle, precise }
     private var mode = Mode.off
 
+    /// No-tracking areas from the page (your office, home): automatic walks
+    /// don't record points inside them. Kept here too, since the page isn't
+    /// running when iOS wakes the app in the background.
+    struct Zone: Codable { let lat: Double; let lon: Double; let r: Double }
+    var zones: [Zone] {
+        get { (UserDefaults.standard.data(forKey: "zones")).flatMap { try? JSONDecoder().decode([Zone].self, from: $0) } ?? [] }
+        set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: "zones"); zoneCache = newValue }
+    }
+    private lazy var zoneCache: [Zone] = zones
+
+    private func inZone(_ l: CLLocation) -> Bool {
+        zoneCache.contains { l.distance(from: CLLocation(latitude: $0.lat, longitude: $0.lon)) <= $0.r }
+    }
+
     private(set) var autoTrack: Bool {
         get { UserDefaults.standard.bool(forKey: "autoTrack") }
         set { UserDefaults.standard.set(newValue, forKey: "autoTrack") }
@@ -303,6 +317,7 @@ final class LocationService: NSObject {
             if !watches.isEmpty { journal.queue(point) }
             guard Self.usable(location) else { continue }
             lastGoodFixAt = Date()
+            if inZone(location) { continue } // a no-tracking area: nothing counts here
             if !watches.isEmpty { WalkActivity.shared.add(location, steps: steps) }
             if journal.current != nil && !inVehicle { journal.append(point) }
         }

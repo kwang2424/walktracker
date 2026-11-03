@@ -4,6 +4,7 @@
 /* global mapboxgl */
 
 import { drawBadge, badgeName } from './placeicons.js';
+import { circleRing } from './zones.js';
 
 const STYLE = 'mapbox://styles/mapbox/standard';
 const STATE = { none: 0, partial: 1, walked: 2 };
@@ -46,6 +47,7 @@ export class MapView {
     this.hoodStates = new Map(); // feature id -> fraction walked
     this.hoodLit = null;
     this.placesData = collection([]);
+    this.zonesData = collection([]);
     this.placeVisited = new Map(); // place index -> true
     this.popup = null;
     this.me = null;
@@ -195,6 +197,18 @@ export class MapView {
       id: 'blocks-hit', type: 'line', source: 'blocks', layout: round, minzoom: BLOCKS_MIN_ZOOM,
       paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 22 },
     });
+    // No-tracking areas: a light shaded circle with a dashed edge; the one
+    // being placed is drawn in the accent color.
+    m.addSource('zones', { type: 'geojson', data: this.zonesData });
+    const editing = ['==', ['get', 'edit'], 1];
+    add({
+      id: 'zones-fill', type: 'fill', source: 'zones',
+      paint: { 'fill-color': ['case', editing, c.walked, '#64748b'], 'fill-opacity': ['case', editing, 0.18, 0.12], 'fill-emissive-strength': 1 },
+    });
+    add({
+      id: 'zones-line', type: 'line', source: 'zones', layout: round,
+      paint: { 'line-color': ['case', editing, c.walked, '#64748b'], 'line-width': 1.6, 'line-dasharray': [2, 2], 'line-opacity': 0.8, 'line-emissive-strength': 1 },
+    });
     // Landmarks and subway stations: round badges, outlined until visited.
     // Station names show from zoom 15, landmark names from 17.
     this._addBadges();
@@ -246,6 +260,15 @@ export class MapView {
         else this.map.addImage(name, image, { pixelRatio: 2 });
       }
     }
+  }
+
+  // No-tracking areas ([{ lat, lon, r }]) and, while adding one, its preview.
+  setZones(zones, preview = null) {
+    const features = [...zones, ...(preview ? [{ ...preview, edit: 1 }] : [])].map((z) => ({
+      type: 'Feature', properties: { edit: z.edit || 0 }, geometry: { type: 'Polygon', coordinates: [circleRing(z)] },
+    }));
+    this.zonesData = collection(features);
+    this.map.getSource('zones')?.setData(this.zonesData);
   }
 
   // Which kinds of places to show: { landmark: true, station: true }.

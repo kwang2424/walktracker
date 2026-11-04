@@ -1,10 +1,10 @@
-import { haversine, polylineLength, pointInMultiPolygon } from './geo.js';
+import { haversine, midpoint, polylineLength, pointInMultiPolygon } from './geo.js';
 import { parseGpx, toGpx } from './gpx.js';
 import { db } from './db.js';
 import { StillnessDetector, MotionWake, throttle } from './power.js';
 import { streak, weekStats, totals, bestStreak, weeklyTotals, dailyTotals } from './stats.js';
 import { evaluate, factsFrom } from './achievements.js';
-import { weeklyChart, calendarChart } from './charts.js';
+import { weeklyChart, calendarChart, stepsChart } from './charts.js';
 import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { Places, ROUTE_COLORS } from './places.js';
 import { drawBadge } from './placeicons.js';
@@ -376,6 +376,7 @@ async function load() {
   if (resumable) showResumeCard(resumable);
   else centerOnMe({ quiet: true });
   maybeShowInstallTip();
+  refreshSteps();
   loadStreetTotals().then(() => checkAchievements()); // street totals are needed for street achievements
 }
 
@@ -595,6 +596,11 @@ function onPosition(pos) {
   if (!rec) return;
   const { latitude, longitude, accuracy } = pos.coords;
   let p = [latitude, longitude, pos.timestamp || Date.now()];
+  // Steps (iPhone app): the phone's running count, which restarts with GPS.
+  if (pos.steps != null) {
+    if (rec.lastSteps != null && pos.steps >= rec.lastSteps) rec.track.steps = (rec.track.steps || 0) + pos.steps - rec.lastSteps;
+    rec.lastSteps = pos.steps;
+  }
 
   if (rec.paused) {
     // Low-power fallback while stopped: wake once we've clearly moved.
@@ -840,6 +846,7 @@ async function showNextSummary() {
     li.append(Object.assign(document.createElement('span'), { textContent: text }));
     lines.append(li);
   };
+  if (t.steps) line('👟', `${t.steps.toLocaleString()} steps`);
   for (const st of s.finished.slice(0, 3)) line('🏁', `Finished ${st}`);
   for (const h of s.hoods.slice(0, 3)) line('▲', `${h.name}: +${fmtPct(h.gain)} (now ${fmtPct(h.now)})`);
   for (const p of s.places.slice(0, 4)) {
@@ -1371,6 +1378,48 @@ function renderStatsView() {
   );
   weeklyChart($('#chart-weekly'), weeklyTotals(tracks, city.completedAt, 12));
   calendarChart($('#chart-days'), dailyTotals(tracks, 16));
+  renderSteps();
+}
+
+// ---------------------------------------------------------------- steps
+// Daily steps from the phone's pedometer (iPhone app). It only keeps 7 days,
+// so each day it reports is saved here and the history grows from there.
+const STEPS_KEY = 'walktracker.steps';
+let stepHistory = {};
+try { stepHistory = JSON.parse(localStorage.getItem(STEPS_KEY) || '{}'); } catch { /* private mode */ }
+
+async function refreshSteps() {
+  if (!native) return;
+  let days;
+  try { days = await native.call('dailySteps'); } catch { return; }
+  if (!days?.length) return;
+  for (const { day, steps } of days) stepHistory[day] = Math.max(steps, stepHistory[day] || 0);
+  try { localStorage.setItem(STEPS_KEY, JSON.stringify(stepHistory)); } catch { /* ignore */ }
+  if ($('#sheet').open && !$('#stats-view').hidden) renderSteps();
+}
+
+const dayKeyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+function renderSteps() {
+  const has = Object.keys(stepHistory).length > 0;
+  $('#steps-section').hidden = !has;
+  if (!has) return;
+  const days = [];
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today.getTime() - i * 86400000);
+    days.push({ date: d.getTime(), steps: stepHistory[dayKeyOf(d)] || 0 });
+  }
+  const week = days.slice(-7).reduce((n, d) => n + d.steps, 0);
+  const counted = days.filter((d) => d.steps > 0);
+  const avg = counted.length ? Math.round(counted.reduce((n, d) => n + d.steps, 0) / counted.length) : 0;
+  const best = Object.entries(stepHistory).sort((a, b) => b[1] - a[1])[0];
+  $('#step-tiles').replaceChildren(
+    tile('Steps today', days[days.length - 1].steps.toLocaleString(), `${week.toLocaleString()} this week`),
+    tile('Daily average', avg.toLocaleString(), best ? `Best: ${best[1].toLocaleString()} on ${new Date(best[0] + 'T12:00').toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ''),
+  );
+  stepsChart($('#chart-steps'), days);
 }
 
 function renderAwards(streets) {
@@ -1535,7 +1584,8 @@ function openWalkDetail(t) {
   $('#wd-dist').textContent = km(d.distance);
   $('#wd-moving').textContent = minutes(d.movingMs);
   $('#wd-pace').textContent = formatPace(d.pace);
-  $('#wd-sub').textContent = [`${minutes(d.totalMs)} in all`, `${n} new block${n === 1 ? '' : 's'}`, SOURCE_LABEL[t.source] || '', t.original ? 'trimmed' : '']
+  $('#wd-sub').textContent = [`${minutes(d.totalMs)} in all`, `${n} new block${n === 1 ? '' : 's'}`,
+    t.steps ? `${t.steps.toLocaleString()} steps` : '', SOURCE_LABEL[t.source] || '', t.original ? 'trimmed' : '']
     .filter(Boolean).join(' · ');
   // Splits: a bar per kilometer, longer = slower.
   const splits = $('#wd-splits');
@@ -1580,7 +1630,68 @@ function previewTrim() {
   $('#wd-trim-save').disabled = i0 === t0 && i1 === t1;
 }
 
+// ---------------------------------------------------------------- replay
+// The walk draws itself on the map (8-20 s), and the blocks it finished go
+// from grey to green as the line reaches them.
+let replay = null;
+
+function startReplay() {
+  if (!walkOpen) return;
+  stopReplay(false);
+  const t = walkOpen.track;
+  const runs = runsOf(zoned([t])[0]);
+  const pts = runs.flat();
+  if (pts.length < 2) return toast('Nothing to replay.');
+  const ids = [...city.completedAt].filter(([, time]) => time === t.startedAt).map(([id]) => id).filter((id) => city.block(id));
+  // When each new block lights up: the walk point closest to its middle.
+  const lights = ids.map((id) => {
+    const mid = midpoint(city.block(id).coords);
+    let best = 0, bestD = Infinity;
+    pts.forEach((p, i) => { const d = haversine(p, mid); if (d < bestD) { bestD = d; best = i; } });
+    return { at: best, id };
+  }).sort((a, b) => a.at - b.at);
+  for (const { id } of lights) view.setBlockState(id, 'none');
+  const ms = Math.min(20000, Math.max(8000, pts.length * 15));
+  replay = { t, pts, lights, next: 0, start: performance.now(), ms, raf: 0, dist: 0, lit: 0 };
+  $('#walk-detail').hidden = true;
+  $('#replay-bar').hidden = false;
+  $('#rp-title').textContent = `Replaying ${new Date(t.startedAt).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}`;
+  view.setTrim([], 0, 0);
+  view.fitPoints(pts, { bottom: 140 });
+  const frame = (now) => {
+    if (!replay) return;
+    const f = Math.min(1, (now - replay.start) / replay.ms);
+    const k = Math.max(1, Math.floor(f * (pts.length - 1)));
+    view.setReplay(pts, k);
+    while (replay.next < lights.length && lights[replay.next].at <= k) {
+      const { id } = lights[replay.next++];
+      view.setBlockState(id, blockState(id));
+      view.highlight([id], true);
+      setTimeout(() => view.highlight([id], false), 600);
+    }
+    const elapsed = (pts[k][2] || 0) - (pts[0][2] || 0);
+    $('#rp-fill').style.width = `${Math.round(f * 100)}%`;
+    $('#rp-info').textContent = `${km(polylineLength(pts.slice(0, k + 1)))}${elapsed > 0 ? ` · ${minutes(elapsed)}` : ''} · ${replay.next} new block${replay.next === 1 ? '' : 's'}`;
+    if (f < 1) replay.raf = requestAnimationFrame(frame);
+    else setTimeout(() => { if (replay?.t === t) stopReplay(); }, 1500);
+  };
+  replay.raf = requestAnimationFrame(frame);
+}
+
+// Back to the walk card, with every block showing its real state again.
+function stopReplay(reopen = true) {
+  if (!replay) return;
+  const { t, lights } = replay;
+  cancelAnimationFrame(replay.raf);
+  replay = null;
+  for (const { id } of lights) view.setBlockState(id, blockState(id));
+  view.setReplay(null);
+  $('#replay-bar').hidden = true;
+  if (reopen) openWalkDetail(tracks.find((x) => x.id === t.id) || t);
+}
+
 function closeWalkDetail() {
+  stopReplay(false);
   walkOpen = null;
   $('#walk-detail').hidden = true;
   view.setTrim([], 0, 0);
@@ -1793,6 +1904,7 @@ async function importNativeWalks() {
 
 window.addEventListener('native-walks', async () => {
   if (!city.index) return;
+  refreshSteps(); // the app came back to the screen: today's steps moved on
   const added = await importNativeWalks();
   const fromHealth = settings.healthAuto ? await importHealth({ quiet: true, rebuildAfter: false }) : 0;
   if (!added.length && !fromHealth) return;
@@ -2015,6 +2127,8 @@ $('#hood-search').addEventListener('input', renderHoods);
 $('#btn-resume').addEventListener('click', () => resumable && startWalk(resumable));
 $('#sum-next').addEventListener('click', showNextSummary);
 $('#wd-close').addEventListener('click', closeWalkDetail);
+$('#wd-replay').addEventListener('click', startReplay);
+$('#rp-stop').addEventListener('click', () => stopReplay());
 $('#wd-start').addEventListener('input', previewTrim);
 $('#wd-end').addEventListener('input', previewTrim);
 $('#wd-trim-save').addEventListener('click', saveTrim);

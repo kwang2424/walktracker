@@ -12,6 +12,20 @@ export const native = (typeof window !== 'undefined' && window.walktrackerNative
 export const usableFix = (acc, speed) =>
   acc == null || (acc >= 0 && acc <= 35 && !(speed > 7) && (acc <= 20 || speed >= 0));
 
+// Steps during a walk: the phone's running count is in each point (index 5,
+// -1 if unknown); it restarts when GPS does, so add up only the increases.
+export function stepsOf(points) {
+  let total = 0, last = null, any = false;
+  for (const p of points) {
+    const s = p[5];
+    if (s == null || s < 0) continue;
+    if (last != null && s >= last) total += s - last;
+    last = s;
+    any = true;
+  }
+  return any ? total : null;
+}
+
 export function nativeWalkToTrack(w, source = 'auto') {
   // Points: [lat, lon, t, accuracy?, speed?, steps?, gap?]. Health routes are
   // already cleaned by Apple; walks the phone recorded get our own clean-up.
@@ -44,5 +58,6 @@ export function nativeWalkToTrack(w, source = 'auto') {
     source, // 'auto' (recorded by the phone) or 'health' (Apple Health)
     nativeId: w.id,
     ...(breaks.length && { breaks }),
+    ...(stepsOf(w.points) != null && { steps: stepsOf(w.points) }),
   };
 }

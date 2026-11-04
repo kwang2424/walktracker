@@ -138,6 +138,12 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .summary { z-index: 1060; }
 .walkcard { z-index: 1055; max-height: calc(100dvh - 200px - var(--safe-top) - var(--safe-bottom)); overflow-y: auto; }
 .walkcard .act { font-size: 13px; font-weight: 600; color: var(--muted); padding: 4px 8px; }
+.walkcard .wd-play { color: var(--accent); }
+.replay-bar { z-index: 1055; }
+.replay-bar .act { font-size: 13px; font-weight: 600; color: var(--accent); padding: 4px 8px; }
+.rp-progress { height: 6px; border-radius: 3px; background: var(--surface); overflow: hidden; margin: 10px 0 6px; }
+.rp-progress div { height: 100%; width: 0; background: var(--track); border-radius: 3px; }
+.replay-bar p { margin: 0; }
 .wd-splits { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 10px; font-size: 13px; }
 .wd-split { display: grid; grid-template-columns: 54px 1fr 44px; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
 .wd-split .bar { height: 8px; border-radius: 4px; background: var(--surface); overflow: hidden; }

@@ -51,6 +51,7 @@ export class MapView {
     this.heatData = collection([]);
     this.heatVisible = false;
     this.trimData = collection([]);
+    this.replayData = collection([]);
     this.placeVisited = new Map(); // place index -> true
     this.popup = null;
     this.me = null;
@@ -225,6 +226,16 @@ export class MapView {
     add({
       id: 'trim', type: 'line', source: 'trim', layout: round, filter: ['==', ['get', 'cut'], 0],
       paint: { 'line-color': c.track, 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 17, 6], 'line-opacity': 0.95, 'line-emissive-strength': 1 },
+    });
+    // Replaying a walk: the line so far and a dot at its head.
+    m.addSource('replay', { type: 'geojson', data: this.replayData });
+    add({
+      id: 'replay-line', type: 'line', source: 'replay', layout: round, filter: ['==', ['geometry-type'], 'LineString'],
+      paint: { 'line-color': c.track, 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 17, 6], 'line-opacity': 0.95, 'line-emissive-strength': 1 },
+    });
+    add({
+      id: 'replay-head', type: 'circle', source: 'replay', filter: ['==', ['geometry-type'], 'Point'],
+      paint: { 'circle-radius': 7, 'circle-color': c.track, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 3, 'circle-emissive-strength': 1 },
     });
     // No-tracking areas: a light shaded circle with a dashed edge; the one
     // being placed is drawn in the accent color.
@@ -456,6 +467,16 @@ export class MapView {
   setHeatVisible(on) {
     this.heatVisible = on;
     if (this.map.getLayer('heat')) this.map.setLayoutProperty('heat', 'visibility', on ? 'visible' : 'none');
+  }
+
+  // A walk being replayed, drawn up to point k (null clears it).
+  setReplay(points, k) {
+    const shown = points ? points.slice(0, k + 1) : [];
+    this.replayData = collection(shown.length ? [
+      ...(shown.length > 1 ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: shown.map(ll) } }] : []),
+      { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: ll(shown[shown.length - 1]) } },
+    ] : []);
+    this.map.getSource('replay')?.setData(this.replayData);
   }
 
   // A walk being trimmed: points [[lat, lon]], keeping indexes i0..i1.

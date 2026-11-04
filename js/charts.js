@@ -150,3 +150,60 @@ export function calendarChart(container, days, now = Date.now()) {
   legend.innerHTML = '<span>Less</span>' + [0, 1, 2, 3, 4].map((l) => `<i class="heat-${l}"></i>`).join('') + '<span>More</span>';
   container.append(readout, svg, legend);
 }
+
+// Steps per day: one column per day, single series. days: [{ date (ms), steps }], oldest first.
+export function stepsChart(container, days) {
+  container.replaceChildren();
+  const readout = document.createElement('div');
+  readout.className = 'chart-readout';
+  const width = Math.max(260, container.clientWidth || 320);
+  const height = 140;
+  const pad = { top: 18, right: 4, bottom: 22, left: 40 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const max = niceMax(Math.max(...days.map((d) => d.steps), 1000));
+  const band = plotW / days.length;
+  const barW = Math.max(3, Math.min(14, band - 3));
+  const y = (s) => pad.top + plotH - (s / max) * plotH;
+  const svg = el('svg', { viewBox: `0 0 ${width} ${height}`, width, height, class: 'chart', role: 'img',
+    'aria-label': `Steps per day, last ${days.length} days` });
+  const fmt = (n) => (n >= 1000 ? `${Math.round(n / 100) / 10}k` : `${n}`);
+  for (const v of [0, max]) {
+    const yy = y(v);
+    svg.append(el('line', { x1: pad.left, x2: width - pad.right, y1: yy, y2: yy, class: 'chart-grid' }));
+    const t = el('text', { x: pad.left - 6, y: yy + 4, class: 'chart-tick', 'text-anchor': 'end' });
+    t.textContent = fmt(v);
+    svg.append(t);
+  }
+  const bars = [];
+  days.forEach((d, i) => {
+    const cx = pad.left + band * i + band / 2;
+    if (d.steps > 0) {
+      const top = y(d.steps), base = pad.top + plotH;
+      const r = Math.min(3, base - top, barW / 2);
+      const x0 = cx - barW / 2, x1 = cx + barW / 2;
+      const bar = el('path', { class: 'chart-bar',
+        d: `M${x0},${base}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x1 - r}Q${x1},${top} ${x1},${top + r}V${base}Z` });
+      svg.append(bar);
+      bars[i] = bar;
+    }
+    if (i === 0 || i === days.length - 1) {
+      const t = el('text', { x: cx, y: height - 6, class: 'chart-tick', 'text-anchor': i === 0 ? 'start' : 'end' });
+      t.textContent = i === days.length - 1 ? 'Today' : short(d.date);
+      svg.append(t);
+    }
+    const hit = el('rect', { x: pad.left + band * i, y: pad.top, width: band, height: plotH, class: 'chart-hit' });
+    hit.addEventListener('pointerenter', () => select(i));
+    hit.addEventListener('click', () => select(i));
+    svg.append(hit);
+  });
+  function select(i, focus = true) {
+    const d = days[i];
+    bars.forEach((b, j) => b?.classList.toggle('dim', focus && j !== i));
+    const label = i === days.length - 1 ? 'Today' : new Date(d.date).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+    readout.textContent = `${label}: ${d.steps.toLocaleString()} steps`;
+  }
+  svg.addEventListener('pointerleave', () => select(days.length - 1, false));
+  select(days.length - 1, false);
+  container.append(readout, svg);
+}

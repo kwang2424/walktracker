@@ -100,7 +100,7 @@
 
   <!-- One walk: details, splits, and trimming its start or end -->
   <section id="walk-detail" class="card notice walkcard" hidden>
-    <div class="sum-head"><b id="wd-title"></b><button id="wd-close" class="act">Close</button></div>
+    <div class="sum-head"><b id="wd-title"></b><span><button id="wd-replay" class="act wd-play">▶ Replay</button><button id="wd-close" class="act">Close</button></span></div>
     <div class="sum-stats">
       <div><span id="wd-dist"></span><small>distance</small></div>
       <div><span id="wd-moving"></span><small>moving</small></div>
@@ -118,6 +118,13 @@
         <button id="wd-trim-save" class="btn btn-primary">Save trim</button>
       </div>
     </details>
+  </section>
+
+  <!-- Replaying a walk on the map -->
+  <section id="replay-bar" class="card notice replay-bar" hidden>
+    <div class="sum-head"><b id="rp-title">Replaying</b><button id="rp-stop" class="act">Stop</button></div>
+    <div class="bar rp-progress"><div id="rp-fill"></div></div>
+    <p class="muted small" id="rp-info"></p>
   </section>
 
   <!-- After a walk (automatic ones: when the app next opens) -->
@@ -255,6 +262,11 @@
         <div class="chart-box" id="chart-weekly"></div>
         <h3>Walking days</h3>
         <div class="chart-box" id="chart-days"></div>
+        <div id="steps-section" hidden>
+          <h3>Steps per day</h3>
+          <div class="tiles" id="step-tiles"></div>
+          <div class="chart-box" id="chart-steps"></div>
+        </div>
       </div>
       <div id="places-view" hidden>
         <div class="tiles" id="place-tiles"></div>

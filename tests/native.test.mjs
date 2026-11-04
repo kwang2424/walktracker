@@ -40,3 +40,11 @@ test('Wi-Fi/cell positions and train-speed fixes are left out of auto walks', ()
   assert.deepEqual(t.points.map((p) => p[2] - t0), [0, 15000, 60000]);
   assert.equal(t.points[0].length, 3);
 });
+
+test('steps during an automatic walk add up across pedometer restarts', async () => {
+  const { stepsOf } = await import('../js/native.js');
+  // index 5: running count; it restarts at 0 halfway (GPS turned off and on).
+  const pts = [[0, 0, 0, 5, 1, 0], [0, 0, 1, 5, 1, 40], [0, 0, 2, 5, 1, 90], [0, 0, 3, 5, 1, 0], [0, 0, 4, 5, 1, 30], [0, 0, 5, 5, 1, -1]];
+  assert.equal(stepsOf(pts), 120);
+  assert.equal(stepsOf([[0, 0, 0, 5, 1, -1]]), null);
+});

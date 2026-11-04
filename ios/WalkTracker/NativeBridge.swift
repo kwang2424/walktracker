@@ -151,6 +151,8 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
             } catch {
                 return (nil, error.localizedDescription)
             }
+        case "dailySteps":
+            return (await location.dailySteps(), nil)
         case "setZones":
             let raw = body["zones"] as? [[String: Any]] ?? []
             location.zones = raw.compactMap { z in

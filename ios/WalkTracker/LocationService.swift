@@ -265,6 +265,30 @@ final class LocationService: NSObject {
         onAutoWalkFinished?()
     }
 
+    /// Steps per day from the phone's pedometer, which keeps the last 7 days:
+    /// [{ day: "2026-11-04", steps }], oldest first. The page saves them, so its
+    /// history grows past 7 days.
+    func dailySteps(days: Int = 7) async -> [[String: Any]] {
+        guard CMPedometer.isStepCountingAvailable(), CMPedometer.authorizationStatus() != .denied,
+              CMPedometer.authorizationStatus() != .restricted else { return [] }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let format = DateFormatter()
+        format.dateFormat = "yyyy-MM-dd"
+        var out: [[String: Any]] = []
+        for back in stride(from: days - 1, through: 0, by: -1) {
+            guard let start = cal.date(byAdding: .day, value: -back, to: today),
+                  let end = cal.date(byAdding: .day, value: 1, to: start) else { continue }
+            let steps: Int? = await withCheckedContinuation { cont in
+                pedometer.queryPedometerData(from: start, to: min(end, Date())) { data, _ in
+                    cont.resume(returning: data?.numberOfSteps.intValue)
+                }
+            }
+            if let steps { out.append(["day": format.string(from: start), "steps": steps]) }
+        }
+        return out
+    }
+
     /// Counts steps while GPS records, so rides (subway, bus, car) can be told
     /// apart from walking: lots of distance, no steps.
     private func startPedometer() {

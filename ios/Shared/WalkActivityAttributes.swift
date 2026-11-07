@@ -18,4 +18,7 @@ struct WalkActivityAttributes: ActivityAttributes {
     }
 
     var startedAt: Date
+    /// Recorded automatically: the card gets a Finish button (walks started in
+    /// the app are finished from the app).
+    var auto: Bool = false
 }

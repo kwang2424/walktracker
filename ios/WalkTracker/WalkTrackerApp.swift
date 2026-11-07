@@ -10,6 +10,8 @@ struct WalkTrackerApp: App {
         // Start GPS handling right away: iOS may launch the app in the
         // background just to deliver location (auto-tracking), with no screen.
         _ = LocationService.shared
+        // The Lock Screen card's Finish button (see Shared/WalkIntents.swift).
+        WalkControl.finish = { LocationService.shared.finishAutoWalkNow() }
     }
 
     var body: some Scene {

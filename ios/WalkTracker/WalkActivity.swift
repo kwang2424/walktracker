@@ -25,16 +25,22 @@ final class WalkActivity {
         }
     }
 
-    func start(startedAt: Date, distance: Double) {
+    func start(startedAt: Date, distance: Double, auto: Bool = false) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         if activity != nil { end(distance: distance, newBlocks: nil, dismiss: true) }
         state = .init(distance: distance)
         lastPoint = nil
         pushedDistance = distance
         activity = try? Activity.request(
-            attributes: WalkActivityAttributes(startedAt: startedAt),
+            attributes: WalkActivityAttributes(startedAt: startedAt, auto: auto),
             content: .init(state: state, staleDate: nil)
         )
+    }
+
+    /// Start one unless it's already showing.
+    func startIfNeeded(startedAt: Date, distance: Double, auto: Bool) {
+        if activity != nil { return }
+        start(startedAt: startedAt, distance: distance, auto: auto)
     }
 
     /// A GPS fix good enough to count (LocationService checks). Keeps the

@@ -45,6 +45,9 @@ You need a Mac with **Xcode** (free from the Mac App Store, version 16 or newer)
 - Walks you start with **Start walk** show a running clock, distance and steps on the Lock Screen and in
   the Dynamic Island. Automatic walks send a "Walk recorded" notification when they end (allow
   notifications when asked); open the app for a summary card with your new blocks.
+- While an automatic walk is recording, open the app to see it live (distance, time, new blocks, the
+  line on the map) and **Finish walk** to end it now. Once you've opened the app, it's also on the Lock
+  Screen and in the Dynamic Island, with a **Finish** button.
 - To keep a copy off the phone: Menu → Settings → **Choose backup folder**, and pick a folder in iCloud
   Drive. After every change the app saves `WalkTracker backup.json` there (plus daily copies in
   `Older backups`, last 10 days). To restore, use **Import backup** and pick that file.

@@ -100,6 +100,7 @@ final class LocationService: NSObject {
     private lazy var zoneCache: [Zone] = zones
 
     private var zoneGap = false
+    private var waitForStop = false
 
     private func inZone(_ l: CLLocation) -> Bool {
         zoneCache.contains { $0.contains(l) }
@@ -215,10 +216,13 @@ final class LocationService: NSObject {
         let onFoot = (activity.walking || activity.running) && activity.confidence != .low
         if (activity.automotive || activity.cycling) && activity.confidence != .low { inVehicle = true }
         if onFoot || activity.stationary { inVehicle = false }
+        // After you finish a walk by hand, wait until you've stopped before the
+        // next one can start (or it would restart right away).
+        if !(activity.walking || activity.running) { waitForStop = false }
         if onFoot {
             offFootSince = nil
             finishTimer?.invalidate()
-            if journal.current == nil && watches.isEmpty {
+            if journal.current == nil && watches.isEmpty && !waitForStop {
                 journal.begin()
                 lastGoodFixAt = Date()
                 startWatchdog()
@@ -260,12 +264,40 @@ final class LocationService: NSObject {
         watchdog?.invalidate()
         watchdog = nil
         offFootSince = nil
-        if let walk = journal.finishCurrent(), UIApplication.shared.applicationState != .active {
+        let distance = journal.current?.distance ?? 0
+        let walk = journal.finishCurrent()
+        WalkActivity.shared.end(distance: walk?.distance ?? distance, newBlocks: nil, dismiss: walk == nil)
+        if let walk, UIApplication.shared.applicationState != .active {
             // On screen, the page shows its own summary card instead.
             WalkNotifier.walkRecorded(distance: walk.distance, duration: (walk.endedAt - walk.startedAt) / 1000)
         }
         updateMode()
         onAutoWalkFinished?()
+    }
+
+    /// "Finish walk" (in the app, or the Lock Screen card's button).
+    func finishAutoWalkNow() {
+        guard journal.current != nil else { return }
+        waitForStop = true
+        finishAutoWalk()
+    }
+
+    /// The automatic walk being recorded, for the page to show:
+    /// { startedAt, distance, points: [[lat, lon, t, acc, speed, steps, gap]] }, or nil.
+    func currentWalk() -> [String: Any]? {
+        guard let walk = journal.current else { return nil }
+        return [
+            "startedAt": walk.startedAt,
+            "distance": walk.distance,
+            "points": walk.points.map { [$0.lat, $0.lon, $0.t, $0.acc, $0.speed, Double($0.steps ?? -1), $0.gap == true ? 1 : 0] },
+        ]
+    }
+
+    /// The app is on screen during an automatic walk: show it on the Lock
+    /// Screen too (iOS only allows starting that while the app is open).
+    func showAutoWalkOnLockScreen() {
+        guard let walk = journal.current, watches.isEmpty else { return }
+        WalkActivity.shared.startIfNeeded(startedAt: Date(timeIntervalSince1970: walk.startedAt / 1000), distance: walk.distance, auto: true)
     }
 
     /// Steps per day from the phone's pedometer, which keeps the last 7 days:
@@ -382,7 +414,7 @@ final class LocationService: NSObject {
             guard Self.usable(location) else { continue }
             lastGoodFixAt = Date()
             if inZone(location) { zoneGap = true; continue } // a no-tracking area: nothing counts here
-            if !watches.isEmpty { WalkActivity.shared.add(location, steps: steps) }
+            if !watches.isEmpty || (journal.current != nil && !inVehicle) { WalkActivity.shared.add(location, steps: steps) }
             if journal.current != nil && !inVehicle {
                 var p = point
                 if zoneGap { p.gap = true; zoneGap = false } // don't join across the area

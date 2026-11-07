@@ -67,6 +67,7 @@ final class WebHost: NSObject, ObservableObject {
             // Ask once (iOS shows the prompt only the first time) so automatic
             // walks can say "Walk recorded" when they end.
             if location.autoTrack { WalkNotifier.askPermission() }
+            location.showAutoWalkOnLockScreen()
             location.flush()
             notifyPage()
         case .background:

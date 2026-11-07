@@ -15,7 +15,7 @@ import { walkDetails, formatPace, trimWalk, untrimWalk } from './walkstats.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, overrideWalked } from './city.js';
 import { KeepAwake, isIOS } from './awake.js';
-import { native, nativeWalkToTrack } from './native.js';
+import { native, nativeWalkToTrack, usableFix } from './native.js';
 
 const MAX_VISIBLE_HOODS = 30; // load blocks for at most this many neighborhoods on screen
 const RESUME_WITHIN_MS = 3 * 3600000; // offer to continue a walk the phone closed within this time
@@ -189,6 +189,7 @@ function onHoodLoaded(id) {
   clearTimeout(redrawTimer);
   redrawTimer = setTimeout(() => {
     city.refreshMatches();
+    countAutoLiveBlocks();
     if (asleep()) { blocksDirty = true; return; }
     drawBlocks();
     renderStats();
@@ -377,6 +378,7 @@ async function load() {
   else centerOnMe({ quiet: true });
   maybeShowInstallTip();
   refreshSteps();
+  checkAutoWalk();
   loadStreetTotals().then(() => checkAchievements()); // street totals are needed for street achievements
 }
 
@@ -540,6 +542,7 @@ async function startWalk(resume = null) {
   if (!native) awake.start(); // the iPhone app records with the screen off
   if (settings.smartGps && !native) askMotionPermission();
   if (!resume && resumable) await finishResumable(); // starting fresh: save the old one
+  endAutoLive(false); // a walk you start takes over from an automatic one
   const track = resume || { name: '', startedAt: Date.now(), points: [], inProgress: true, source: 'recorded' };
   rec = {
     track, points: track.points, dist: resume ? polylineLength(track.points) : 0, newBlocks: new Set(), lastSave: Date.now(),
@@ -1902,16 +1905,94 @@ async function importNativeWalks() {
   return added;
 }
 
-window.addEventListener('native-walks', async () => {
+// The app came back to the screen, or an automatic walk just ended.
+async function pickUpNativeWalks() {
   if (!city.index) return;
-  refreshSteps(); // the app came back to the screen: today's steps moved on
+  refreshSteps(); // today's steps moved on
   const added = await importNativeWalks();
   const fromHealth = settings.healthAuto ? await importHealth({ quiet: true, rebuildAfter: false }) : 0;
-  if (!added.length && !fromHealth) return;
-  await rebuild();
-  if (fromHealth) toast(`${fromHealth} walk${fromHealth === 1 ? '' : 's'} added from Apple Health`, 4000);
-  queueWalkSummaries(added);
-});
+  if (added.length || fromHealth) {
+    endAutoLive(false);
+    await rebuild();
+    if (fromHealth) toast(`${fromHealth} walk${fromHealth === 1 ? '' : 's'} added from Apple Health`, 4000);
+    queueWalkSummaries(added);
+  }
+  checkAutoWalk();
+}
+window.addEventListener('native-walks', pickUpNativeWalks);
+
+// ---------------------------------------------------------------- automatic walk in progress
+// While the phone records a walk by itself and the app is open: a card with
+// its distance, time and new blocks, the line on the map, and Finish.
+let autoLive = null; // { startedAt, points, seen, newBlocks, poll, tick }
+
+async function checkAutoWalk() {
+  if (!native || rec || !city.index) return;
+  let w;
+  try { w = await native.call('currentWalk'); } catch { return; }
+  if (!w) { endAutoLive(); return; }
+  if (autoLive && autoLive.startedAt !== w.startedAt) endAutoLive(false);
+  if (!autoLive) {
+    autoLive = { startedAt: w.startedAt, points: [], seen: 0, newBlocks: new Set(), gap: false };
+    city.startLive(autoLive.points);
+    autoLive.tick = setInterval(renderAutoLive, 1000);
+    autoLive.poll = setInterval(checkAutoWalk, 10000);
+    $('#auto-walk').hidden = false;
+  }
+  // New points since last time: count them like a walk you started yourself.
+  const changed = new Set();
+  for (const raw of w.points.slice(autoLive.seen)) {
+    const [lat, lon, t, acc, speed, , gap] = raw;
+    if (!usableFix(acc, speed)) continue;
+    const p = [lat, lon, t];
+    if (inZone(p, settings.zones)) { autoLive.gap = true; continue; }
+    const last = autoLive.points[autoLive.points.length - 1];
+    autoLive.points.push(p);
+    if (!last || gap === 1 || autoLive.gap) { autoLive.gap = false; continue; }
+    city.addLiveSegment(last, p).forEach((id) => changed.add(id));
+  }
+  autoLive.seen = w.points.length;
+  if (changed.size) queueRestyle(changed);
+  countAutoLiveBlocks();
+  view.setLive(autoLive.points);
+  renderAutoLive();
+}
+
+// New blocks so far: walked now, but by no saved walk (also counts areas that
+// finished loading after the walk passed them).
+function countAutoLiveBlocks() {
+  if (!autoLive) return;
+  autoLive.newBlocks = new Set(city.loadedBlocks().filter((b) => city.isWalked(b.id) && !city.completedAt.has(b.id)).map((b) => b.id));
+}
+
+function renderAutoLive() {
+  if (!autoLive) return;
+  const since = new Date(autoLive.startedAt);
+  $('#aw-since').textContent = `since ${since.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  $('#aw-dist').textContent = km(polylineLength(autoLive.points));
+  $('#aw-time').textContent = clock(Date.now() - autoLive.startedAt);
+  $('#aw-blocks').textContent = autoLive.newBlocks.size.toLocaleString();
+}
+
+// Stop showing it (the walk ended, or was saved and imported).
+function endAutoLive(recount = true) {
+  if (!autoLive) return;
+  clearInterval(autoLive.tick);
+  clearInterval(autoLive.poll);
+  const had = autoLive.points.length > 1;
+  autoLive = null;
+  city.stopLive();
+  view.setLive([]);
+  $('#auto-walk').hidden = true;
+  if (recount && had) rebuild(); // take its live blocks back off; the saved walk brings them back
+}
+
+async function finishAutoWalk() {
+  $('#aw-finish').disabled = true;
+  try { await native.call('finishAutoWalk'); } catch { /* the walk may have just ended by itself */ }
+  $('#aw-finish').disabled = false;
+  await pickUpNativeWalks();
+}
 
 const SOURCE_LABEL = { gpx: 'imported', auto: 'automatic', health: 'Apple Health' };
 
@@ -2127,6 +2208,8 @@ $('#hood-search').addEventListener('input', renderHoods);
 $('#btn-resume').addEventListener('click', () => resumable && startWalk(resumable));
 $('#sum-next').addEventListener('click', showNextSummary);
 $('#wd-close').addEventListener('click', closeWalkDetail);
+$('#aw-finish').addEventListener('click', finishAutoWalk);
+$('#aw-hide').addEventListener('click', () => { $('#auto-walk').hidden = true; });
 $('#wd-replay').addEventListener('click', startReplay);
 $('#rp-stop').addEventListener('click', () => stopReplay());
 $('#wd-start').addEventListener('input', previewTrim);

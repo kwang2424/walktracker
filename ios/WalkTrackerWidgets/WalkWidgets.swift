@@ -14,7 +14,7 @@ struct WalkTrackerWidgets: WidgetBundle {
 struct WalkLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: WalkActivityAttributes.self) { context in
-            LockScreenView(start: context.attributes.startedAt, state: context.state)
+            LockScreenView(start: context.attributes.startedAt, state: context.state, auto: context.attributes.auto)
                 .activityBackgroundTint(Color(.systemBackground).opacity(0.9))
         } dynamicIsland: { context in
             let state = context.state
@@ -29,7 +29,11 @@ struct WalkLiveActivity: Widget {
                     Text(Format.distance(state.distance)).font(.headline.monospacedDigit())
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(Format.detail(state)).font(.subheadline).foregroundStyle(.secondary)
+                    HStack {
+                        Text(Format.detail(state)).font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        if context.attributes.auto && state.endedAt == nil { FinishButton() }
+                    }
                 }
             } compactLeading: {
                 Image(systemName: state.endedAt == nil ? "figure.walk" : "checkmark.circle.fill").foregroundStyle(Theme.green)
@@ -46,11 +50,36 @@ private enum Theme {
     static let green = Color(red: 0.02, green: 0.59, blue: 0.41)
 }
 
+/// Ends an automatic walk from the Lock Screen (runs in the app; see Shared/WalkIntents.swift).
+private struct FinishButton: View {
+    var body: some View {
+        Button(intent: FinishWalkIntent()) {
+            Label("Finish", systemImage: "stop.fill").font(.caption.weight(.semibold))
+        }
+        .tint(Theme.green)
+    }
+}
+
 private struct LockScreenView: View {
     let start: Date
     let state: WalkActivityAttributes.ContentState
+    let auto: Bool
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            row
+            if auto && state.endedAt == nil {
+                HStack {
+                    Text("Recording automatically").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    FinishButton()
+                }
+            }
+        }
+        .padding(16)
+    }
+
+    private var row: some View {
         HStack(spacing: 14) {
             Image(systemName: state.endedAt == nil ? "figure.walk" : "checkmark.circle.fill")
                 .font(.title2)
@@ -67,7 +96,6 @@ private struct LockScreenView: View {
                 ElapsedText(start: start, end: state.endedAt).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
         }
-        .padding(16)
     }
 }
 

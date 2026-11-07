@@ -120,6 +120,21 @@
     </details>
   </section>
 
+  <!-- iPhone app: an automatic walk being recorded right now -->
+  <section id="auto-walk" class="card notice" hidden>
+    <div class="sum-head"><b>Walk in progress</b><span class="muted small" id="aw-since"></span></div>
+    <div class="sum-stats">
+      <div><span id="aw-dist"></span><small>distance</small></div>
+      <div><span id="aw-time"></span><small>time</small></div>
+      <div><span id="aw-blocks"></span><small>new blocks</small></div>
+    </div>
+    <p class="muted small aw-note">Recording automatically. It ends by itself 2 minutes after you stop walking.</p>
+    <div class="notice-actions">
+      <button id="aw-hide" class="btn btn-ghost">Hide</button>
+      <button id="aw-finish" class="btn btn-primary">Finish walk</button>
+    </div>
+  </section>
+
   <!-- Replaying a walk on the map -->
   <section id="replay-bar" class="card notice replay-bar" hidden>
     <div class="sum-head"><b id="rp-title">Replaying</b><button id="rp-stop" class="act">Stop</button></div>

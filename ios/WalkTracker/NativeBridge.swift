@@ -151,6 +151,11 @@ final class NativeCalls: NSObject, WKScriptMessageHandlerWithReply {
             } catch {
                 return (nil, error.localizedDescription)
             }
+        case "currentWalk":
+            return (location.currentWalk().map { $0 as Any } ?? NSNull(), nil)
+        case "finishAutoWalk":
+            location.finishAutoWalkNow()
+            return (true, nil)
         case "dailySteps":
             return (await location.dailySteps(), nil)
         case "setZones":

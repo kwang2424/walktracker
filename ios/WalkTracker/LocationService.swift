@@ -37,6 +37,9 @@ final class LocationService: NSObject {
     /// An auto walk ends after this long without one usable GPS fix (e.g. the
     /// subway: underground there's only rough Wi-Fi/cell positioning).
     private static let noFixLimit: TimeInterval = 300
+    /// An auto walk ends once you've stopped walking for this long (a short
+    /// wait at a light or in a shop doesn't split it; longer stops do).
+    private static let stopAfter: TimeInterval = 120
 
     /// A fix good enough to count toward walked streets. Underground and indoors
     /// iOS falls back to Wi-Fi and cell positions (tens of meters off, no speed),
@@ -242,13 +245,13 @@ final class LocationService: NSObject {
 
     private func scheduleFinishCheck() {
         finishTimer?.invalidate()
-        finishTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: false) { [weak self] _ in
+        finishTimer = Timer.scheduledTimer(withTimeInterval: Self.stopAfter, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.finishIfOffFoot() }
         }
     }
 
     private func finishIfOffFoot() {
-        guard let since = offFootSince, Date().timeIntervalSince(since) >= 170 else { return }
+        guard let since = offFootSince, Date().timeIntervalSince(since) >= Self.stopAfter - 10 else { return }
         finishAutoWalk()
     }
 

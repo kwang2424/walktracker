@@ -216,3 +216,28 @@ test('paths are kept apart from streets: their own progress, never block counts'
   assert.ok(s.pathWalkedLength > 600);
   assert.equal(s.hoods.find((h) => h.id === 'W1').pathWalkedLength, s.pathWalkedLength);
 });
+
+test('walks re-matched once their neighborhoods load are counted once', async () => {
+  const built = buildCity(raw, hoodsGeo);
+  const { fetchImpl } = serve(built);
+  const city = await new City({ fetchImpl }).init();
+  // A walk along Street 0 across both neighborhoods; only West loaded at first,
+  // so it counts the simple way until East arrives and it's map-matched.
+  const walk = { id: 9, startedAt: 0, points: walkAlongRow(0, 0, 4) };
+  city.setTracks([walk]);
+  await city.ensure(['W1']);
+  assert.ok(city.loaded.get('W1').fallback, 'West counted the simple way first');
+  await city.ensure(['E1']);
+  city.refreshMatches();
+  const walked = city.loadedBlocks().filter((b) => city.isWalked(b.id));
+  assert.ok(walked.length > 0);
+  // Every "first finished" entry is a walked block, and the walk's new-block
+  // tally is exactly the blocks it finished: nothing left over from before.
+  for (const id of city.completedAt.keys()) assert.ok(city.isWalked(id), `${id} recorded as finished but isn't walked`);
+  assert.equal(city.newByTrack.get(9), walked.length);
+  assert.equal(city.completedAt.size, walked.length);
+  // Doing it again changes nothing.
+  for (const e of city.loaded.values()) e.fallback = true;
+  city.refreshMatches();
+  assert.equal(city.newByTrack.get(9), walked.length);
+});

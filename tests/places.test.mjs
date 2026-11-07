@@ -51,3 +51,10 @@ test('line progress counts each line a station serves', () => {
   assert.deepEqual(lines.find((l) => l.route === '4'), { route: '4', total: 1, visited: 1 });
   assert.ok(ROUTE_ORDER.includes('SIR'));
 });
+
+test('a break in a walk (a no-tracking area) is never joined to visit a landmark', () => {
+  // Two points on either side of the landmark, ~110 m apart, with a break between them.
+  const points = [[40.7395, -73.98952, 0], [40.7405, -73.98952, 60000]];
+  assert.ok(places.visits([{ startedAt: 1, points }]).has('L:LP-1'), 'joined, the line passes the landmark');
+  assert.ok(!places.visits([{ startedAt: 1, points, breaks: [1] }]).has('L:LP-1'), 'with a break it must not count');
+});

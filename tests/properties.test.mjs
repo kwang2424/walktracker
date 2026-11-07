@@ -143,6 +143,12 @@ forCases('the same walks always give the same blocks, in any order', async (r) =
   const b = walkedSet(await cityFor(g, [...walks].reverse()));
   const c = walkedSet(await cityFor(g, [...walks, ...walks.map((w) => ({ ...w, id: w.id + 10 }))]));
   assert.deepEqual([...b].sort(), [...a].sort(), 'order changed the result');
+  // Tallies match the map: every "first finished" block is walked, and the
+  // walks' new blocks add up to the blocks walked.
+  const city = await cityFor(g, walks);
+  for (const id of city.completedAt.keys()) assert.ok(city.isWalked(id), `${id} finished but not walked`);
+  const total = walks.reduce((n, w) => n + (city.newByTrack.get(w.id) || 0), 0);
+  assert.equal(total, walkedSet(city).size, 'new blocks per walk don\'t add up to the blocks walked');
   assert.deepEqual([...c].sort(), [...a].sort(), 'walking the same walk again changed the result');
 });
 

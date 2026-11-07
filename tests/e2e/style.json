@@ -1,0 +1,12 @@
+{
+  "version": 8,
+  "name": "WalkTracker test map",
+  "glyphs": "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+  "sources": {
+    "empty": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
+  },
+  "layers": [
+    { "id": "background", "type": "background", "paint": { "background-color": "#eef0ee" } },
+    { "id": "labels", "type": "symbol", "source": "empty", "layout": { "text-field": "", "text-font": ["Noto Sans Regular"] } }
+  ]
+}

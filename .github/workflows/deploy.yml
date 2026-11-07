@@ -26,6 +26,8 @@ jobs:
         with:
           node-version: 22
       - run: npm test
+      # The same property tests with many more random cases (about 15 s).
+      - run: npm run test:properties
 
   # Builds the site, including NYC's blocks by neighborhood (scripts/build_city.mjs).
   # Runs on pull requests too, so a broken data build shows up before merging.
@@ -67,9 +69,18 @@ jobs:
             echo "::error::No street data was built, so the app can't show NYC's blocks."
             exit 1
           fi
+      - name: Check the street data
+        run: node scripts/check_city.mjs data/nyc
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .
+      # Browser tests on the real data, after the upload so their tools aren't
+      # published; a failure still stops the deploy (it needs this job to pass).
+      - name: Browser tests
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npm run test:e2e
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

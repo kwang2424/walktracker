@@ -81,6 +81,9 @@ jobs:
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
           npm run test:e2e
+      # Simulated NYC days on the real data: commutes, errands, Midtown, rides, runs.
+      - name: Simulated NYC days
+        run: npm run test:sim
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

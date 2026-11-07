@@ -79,6 +79,9 @@ export function route(graph, from, to, { streetsOnly = false } = {}) {
   return { coords, edges: legs.map((l) => l.edge.id) };
 }
 
+// Midtown's tall buildings: where the simulated GPS bounces (multipath).
+export const inCanyon = (p) => p[0] > 40.745 && p[0] < 40.77 && p[1] > -73.995 && p[1] < -73.965;
+
 // ---- the person and their phone ----------------------------------------------------
 // A plan is a list of legs: { mode, route, ... }. Modes: walk, run, bike, bus,
 // taxi, subway (underground: station Wi-Fi only), stay (in a building).
@@ -88,39 +91,60 @@ export function simulate(plan, { seed = 1, start = Date.UTC(2026, 10, 9, 12, 0) 
   const r = rng(seed);
   const project = makeProjector(40.72);
   const fixes = []; // { lat, lon, t, acc, speed, steps, motion }
+  const motions = []; // { t, m }: the true activity, once a second
+  const legs = []; // { mode, from, to, meters }
   let t = start, steps = 0;
   let last = null;
   let multipath = null; // { until, dx, dy }: tall buildings bouncing the signal
-  const canyon = (p) => p[0] > 40.745 && p[0] < 40.77 && p[1] > -73.995 && p[1] < -73.965; // Midtown
+  // GPS error drifts slowly (it's mostly the same for tens of seconds), it
+  // doesn't jump around independently every second.
+  let ex = 0, ey = 0, lastErrT = null;
+  const drift = (sigma) => {
+    const dt = lastErrT == null ? 60 : Math.max(0, (t - lastErrT) / 1000);
+    lastErrT = t;
+    const rho = Math.exp(-dt / 20);
+    const k = Math.sqrt(1 - rho * rho) * sigma;
+    ex = rho * ex + k * r.normal();
+    ey = rho * ey + k * r.normal();
+    return [ex + 0.3 * sigma * r.normal(), ey + 0.3 * sigma * r.normal()]; // plus a little jitter
+  };
+  const canyon = inCanyon;
   const emit = (p, { motion, speed, indoor = false, wifiOnly = false, quality = 1 }) => {
     let [lat, lon] = p;
     let acc, gpsSpeed = speed;
     if (wifiOnly || indoor) {
       // Wi-Fi / cell positioning: tens of meters off, no speed.
       lat += (r.normal() * 25) / 111320; lon += (r.normal() * 25) / 84000;
-      acc = r.range(25, 65); gpsSpeed = -1;
+      acc = r.next() < 0.15 ? r.range(12, 20) : r.range(25, 65); gpsSpeed = -1;
     } else {
       let sigma = canyon(p) ? 9 : 4;
       if (canyon(p) && !multipath && r.next() < 0.01) multipath = { until: t + r.range(10, 25) * 1000, dx: r.range(-60, 60), dy: r.range(-60, 60) };
       if (multipath && t > multipath.until) multipath = null;
       const bias = multipath ? [multipath.dx, multipath.dy] : [0, 0];
-      lat += (r.normal() * sigma * quality + bias[1]) / 111320;
-      lon += (r.normal() * sigma * quality + bias[0]) / 84000;
+      const [nx, ny] = drift(sigma * quality);
+      lat += (ny + bias[1]) / 111320;
+      lon += (nx + bias[0]) / 84000;
       acc = multipath ? r.range(10, 20) : sigma * r.range(1.2, 2.2); // iOS under-reports multipath
     }
+    motions.push({ t, m: motion });
     const fix = { lat, lon, t, acc, speed: gpsSpeed, steps, motion };
     // iOS: a new fix once moved ~4 m (indoors / stopped: occasional updates anyway).
     if (!last || haversine([last.lat, last.lon], [lat, lon]) >= 4 || t - last.t > 30000) { fixes.push(fix); last = fix; }
   };
   for (const leg of plan) {
+    const legStart = t;
+    let legMeters = 0;
     if (leg.mode === 'stay') {
       // Inside a building (office, shop): GPS drifts around it.
       const until = t + leg.minutes * 60000;
       while (t < until) {
         if (r.next() < 0.03) steps += Math.round(r.range(5, 40)); // getting up, walking to the kitchen
-        emit(leg.at, { motion: r.next() < 0.05 ? 'walking' : 'stationary', speed: 0, indoor: true });
+        const m = r.next() < 0.05 ? 'walking' : 'stationary';
+        emit(leg.at, { motion: m, speed: 0, indoor: true });
+        for (let k = 1; k < 15; k++) motions.push({ t: t + k * 1000, m });
         t += 15000;
       }
+      legs.push({ mode: leg.mode, from: legStart, to: t, meters: 0 });
       continue;
     }
     const pts = leg.route.coords;
@@ -144,65 +168,129 @@ export function simulate(plan, { seed = 1, start = Date.UTC(2026, 10, 9, 12, 0) 
         const p = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
         steps += stepsPerSec ? Math.round(stepsPerSec * r.range(0.8, 1.2)) : (r.next() < 0.02 ? 1 : 0);
         if (leg.mode === 'subway') {
-          if (leg.stations?.some((st) => haversine(st, p) < 80)) emit(p, { motion, speed, wifiOnly: true });
+          if (leg.stations?.some((st) => haversine(st, p) < 80) || r.next() < 0.01) emit(p, { motion, speed, wifiOnly: true });
+          else motions.push({ t, m: motion }); // underground: no fix, but the motion sensor still runs
         } else emit(p, { motion, speed, quality: leg.quality ?? 1 });
+        legMeters += Math.min(speed, d - s);
         t += 1000;
         if (r.next() < 0.05) speed = r.range(...speedFor);
       }
     }
     void project;
+    legs.push({ mode: leg.mode, from: legStart, to: t, meters: legMeters });
   }
-  return { fixes, end: t };
+  return { fixes, motions, legs, end: t };
 }
 
-// The iPhone app's automatic-walk rules (LocationService.swift), applied to
-// the simulated phone: walks start when the motion sensor says walking/running
-// (after its usual lag), points need usable GPS and no vehicle, they end 2 min
-// after stopping or 5 min without usable GPS, and walks under 100 m are dropped.
-export function phoneAutoWalks(fixes, zones = []) {
+// The iPhone app's automatic-walk rules, as written in LocationService.swift,
+// run second by second: motion updates arrive by themselves (~15 s late, plus
+// updates whenever the sensor's confidence changes, which in vehicles is
+// often), the "stopped walking" timer and the no-GPS watchdog run on their own
+// clocks, and GPS fixes are handled exactly as the app does.
+export const PHONE = { stopAfter: 120, noFixLimit: 300, motionLag: 15, flicker: { automotive: 0.15, cycling: 0.1, unknown: 0.15, stationary: 0.03, walking: 0.01, running: 0.01 } };
+
+export function phoneAutoWalks(sim, zones = [], { seed = 7, model = PHONE } = {}) {
+  const r = rng(seed);
   const walks = [];
-  let cur = null, offSince = null, lastGood = null, inVehicle = false, zoneGap = false;
-  let motionLagged = 'stationary', motionSince = 0, pendingMotion = null;
-  const finish = () => {
+  let cur = null, offFootSince = null, inVehicle = false, zoneGap = false, waitForStop = false;
+  let lastGoodFixAt = 0, finishAt = null, nextWatchdog = null;
+  const finishCurrent = (t) => {
     if (!cur) return;
     let dist = 0;
     for (let i = 1; i < cur.points.length; i++) dist += haversine(cur.points[i - 1], cur.points[i]);
     if (cur.points.length >= 2 && dist >= 100) walks.push(cur);
-    cur = null; offSince = null;
+    cur = null; offFootSince = null; finishAt = null; nextWatchdog = null;
+    void t;
   };
-  for (const f of fixes) {
-    // The motion sensor reports changes ~10-20 s late.
-    if (f.motion !== (pendingMotion?.m ?? motionLagged)) pendingMotion = { m: f.motion, at: f.t };
-    if (pendingMotion && f.t - pendingMotion.at > 15000) { motionLagged = pendingMotion.m; motionSince = f.t; pendingMotion = null; }
-    const onFoot = motionLagged === 'walking' || motionLagged === 'running';
-    if (motionLagged === 'automotive' || motionLagged === 'cycling') inVehicle = true;
-    if (onFoot || motionLagged === 'stationary') inVehicle = false;
-    if (onFoot) {
-      offSince = null;
-      if (!cur) { cur = { id: `W${walks.length + 1}`, startedAt: f.t, endedAt: f.t, points: [] }; lastGood = f.t; }
-    } else if (cur) {
-      if (offSince == null) offSince = motionSince;
-      if (f.t - offSince >= 120000) finish();
-    }
-    if (cur && lastGood != null && f.t - lastGood >= 300000) finish();
-    if (!cur) continue;
-    const usable = f.acc <= 35 && !(f.speed > 7) && (f.acc <= 20 || f.speed >= 0);
-    if (!usable) continue;
-    lastGood = f.t;
-    if (inZone([f.lat, f.lon], zones)) { zoneGap = true; continue; }
-    if (inVehicle) continue;
-    cur.points.push([f.lat, f.lon, f.t, f.acc, f.speed, f.steps, zoneGap ? 1 : 0]);
-    zoneGap = false;
-    cur.endedAt = f.t;
+  // handle(activity:) in LocationService.swift (the current rule is passed in).
+  const handleActivity = (t, m) => model.handleActivity({
+    t, m,
+    get cur() { return cur; }, begin: () => { cur = { id: `W${walks.length + 1}`, startedAt: t, endedAt: t, points: [] }; lastGoodFixAt = t; nextWatchdog = t + 60000; },
+    get offFootSince() { return offFootSince; }, set offFootSince(v) { offFootSince = v; },
+    get finishAt() { return finishAt; }, set finishAt(v) { finishAt = v; },
+    get inVehicle() { return inVehicle; }, set inVehicle(v) { inVehicle = v; },
+    get waitForStop() { return waitForStop; }, set waitForStop(v) { waitForStop = v; },
+    stopAfter: model.stopAfter,
+  });
+  // Events in time order.
+  const reported = []; // motion updates as the app sees them
+  let prev = null;
+  for (const { t, m } of sim.motions) {
+    const at = t + model.motionLag * 1000;
+    if (m !== prev || r.next() < (model.flicker[m] ?? 0)) reported.push({ t: at, m });
+    prev = m;
   }
-  finish();
+  const events = [...reported.map((e) => ({ ...e, kind: 'motion' })), ...sim.fixes.map((f) => ({ t: f.t, f, kind: 'fix' }))].sort((a, b) => a.t - b.t);
+  const timers = (t) => {
+    // The "stopped walking" timer firing (finishIfOffFoot), and the watchdog.
+    if (cur && finishAt != null && t >= finishAt) {
+      finishAt = null;
+      if (offFootSince != null && t - offFootSince >= (model.stopAfter - 10) * 1000) finishCurrent(t);
+    }
+    while (cur && nextWatchdog != null && t >= nextWatchdog) {
+      if (nextWatchdog - lastGoodFixAt >= model.noFixLimit * 1000) { finishCurrent(nextWatchdog); break; }
+      nextWatchdog += 60000;
+    }
+  };
+  for (const e of events) {
+    timers(e.t);
+    if (e.kind === 'motion') { handleActivity(e.t, e.m); continue; }
+    const f = e.f;
+    const usable = f.acc >= 0 && f.acc <= 35 && !(f.speed > 7) && (f.acc <= 20 || f.speed >= 0);
+    if (!usable) continue;
+    lastGoodFixAt = f.t;
+    if (inZone([f.lat, f.lon], zones)) { zoneGap = true; continue; }
+    if (cur && !inVehicle) {
+      cur.points.push([f.lat, f.lon, f.t, f.acc, f.speed, f.steps, zoneGap ? 1 : 0]);
+      zoneGap = false;
+      cur.endedAt = f.t;
+    }
+  }
+  timers(Infinity);
+  finishCurrent(Infinity);
   return walks;
 }
 
+// handle(activity:) as LocationService.swift had it before November 2026: each
+// non-walking update (re)started the 2-minute timer, so in vehicles (where
+// updates keep coming) walks stayed open through whole rides. Kept so a test
+// can show the simulation catches that bug.
+export const SWIFT_BEFORE = (s) => {
+  const onFoot = s.m === 'walking' || s.m === 'running';
+  if (s.m === 'automotive' || s.m === 'cycling') s.inVehicle = true;
+  if (onFoot || s.m === 'stationary') s.inVehicle = false;
+  if (!onFoot) s.waitForStop = false;
+  if (onFoot) {
+    s.offFootSince = null;
+    s.finishAt = null;
+    if (!s.cur && !s.waitForStop) s.begin();
+  } else if (s.cur) {
+    if (s.offFootSince == null) s.offFootSince = s.t;
+    s.finishAt = s.t + s.stopAfter * 1000; // scheduleFinishCheck(): restarts the timer
+  }
+};
+// handle(activity:) as LocationService.swift has it now: the countdown starts
+// once, when you stop walking.
+export const SWIFT_NOW = (s) => {
+  const onFoot = s.m === 'walking' || s.m === 'running';
+  if (s.m === 'automotive' || s.m === 'cycling') s.inVehicle = true;
+  if (onFoot || s.m === 'stationary') s.inVehicle = false;
+  if (!onFoot) s.waitForStop = false;
+  if (onFoot) {
+    s.offFootSince = null;
+    s.finishAt = null;
+    if (!s.cur && !s.waitForStop) s.begin();
+  } else if (s.cur && s.offFootSince == null) {
+    s.offFootSince = s.t;
+    s.finishAt = s.t + s.stopAfter * 1000;
+  }
+};
+PHONE.handleActivity = SWIFT_NOW;
+
 // The whole thing for one day: what the app ends up counting vs the truth.
-export async function scoreDay({ name, plan, zones = [], seed = 1, city }) {
-  const { fixes } = simulate(plan, { seed });
-  const walks = phoneAutoWalks(fixes, zones);
+export async function scoreDay({ name, plan, zones = [], seed = 1, city, model = PHONE }) {
+  const sim = simulate(plan, { seed });
+  const walks = phoneAutoWalks(sim, zones, { seed, model });
   const tracks = walks.map((w, i) => ({ id: i + 1, ...nativeWalkToTrack(w) })).map((t) => withoutZones(t, zones));
   city.setTracks(tracks);
   await city.ensure(city.hoodsIn([40.5, -74.3, 40.95, -73.65], 0).filter((id) => tracks.some((t) => t.points.length && city.hoods.get(id))) .slice(0, 0));
@@ -237,7 +325,18 @@ export async function scoreDay({ name, plan, zones = [], seed = 1, city }) {
   const extra = extraAll.filter((id) => !harmless.includes(id));
   const fromRides = extra.filter((id) => rode.has(id));
   const insideZones = [...walked].filter((id) => city.block(id).coords.every((p) => inZone(p, zones)));
+  // Walks that swallowed a ride (bus, taxi, bike, subway) and how far each
+  // walk's distance is from what was really walked during it.
+  const rides = sim.legs.filter((l) => !['walk', 'run', 'stay'].includes(l.mode));
+  const swallowed = tracks.filter((t) => rides.some((l) => Math.min(t.endedAt, l.to) - Math.max(t.startedAt, l.from) > 60000));
+  const distanceOff = tracks.map((t) => {
+    const onFoot = sim.legs.filter((l) => (l.mode === 'walk' || l.mode === 'run'))
+      .reduce((n, l) => n + l.meters * Math.max(0, Math.min(1, (Math.min(t.endedAt, l.to) - Math.max(t.startedAt, l.from)) / Math.max(1, l.to - l.from))), 0);
+    const canyonShare = t.points.length ? t.points.filter(inCanyon).length / t.points.length : 0;
+    return { recorded: t.distance, walked: onFoot, canyonShare };
+  });
   return {
+    swallowed: swallowed.length, distanceOff,
     name, walks: walks.length, truth: truth.size, found: hit.length, extra: extra.length, harmless: harmless.length, fromRides: fromRides.length,
     insideZones: insideZones.length, recall: truth.size ? hit.length / truth.size : 1,
     missed: [...truth].filter((id) => !walked.has(id)).map((id) => `${city.block(id).name || '(unnamed)'} ${Math.round(city.block(id).length)}m ${(city.fraction(id) * 100).toFixed(0)}%`),
@@ -355,7 +454,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { city, list } = await days();
   for (const [i, d] of list.entries()) {
     const s = await scoreDay({ ...d, seed: i + 1, city });
-    console.log(`\n${s.name}\n  walks recorded: ${s.walks} | blocks walked: ${s.truth} | counted: ${s.found} (${(s.recall * 100).toFixed(0)}%) | wrongly counted: ${s.extra} (${s.fromRides} on streets ridden; ${s.harmless} harmless) | inside the office area: ${s.insideZones}`);
+    console.log(`\n${s.name}\n  walks: ${s.distanceOff.map((d) => `${(d.recorded / 1000).toFixed(1)} km recorded / ${(d.walked / 1000).toFixed(1)} km walked`).join(', ')}${s.swallowed ? ` | ${s.swallowed} walk(s) swallowed a ride` : ''}\n  walks recorded: ${s.walks} | blocks walked: ${s.truth} | counted: ${s.found} (${(s.recall * 100).toFixed(0)}%) | wrongly counted: ${s.extra} (${s.fromRides} on streets ridden; ${s.harmless} harmless) | inside the office area: ${s.insideZones}`);
     if (s.missed.length) console.log(`  missed: ${s.missed.slice(0, 12).join('; ')}`);
     if (s.extras.length) console.log(`  extra: ${s.extras.slice(0, 12).join('; ')}`);
   }

@@ -231,9 +231,14 @@ final class LocationService: NSObject {
             }
         } else if journal.current != nil, !(activity.walking || activity.running) {
             // Stopped, on a train or in a car, or the sensor can't tell ("unknown",
-            // common on the subway): end the walk if it stays that way.
-            if offFootSince == nil { offFootSince = Date() }
-            scheduleFinishCheck()
+            // common on the subway): end the walk if it stays that way. The
+            // countdown starts once: in vehicles the sensor sends updates every
+            // few seconds (its confidence keeps changing), and restarting the
+            // timer on each one kept walks open through whole rides.
+            if offFootSince == nil {
+                offFootSince = Date()
+                scheduleFinishCheck()
+            }
         }
     }
 

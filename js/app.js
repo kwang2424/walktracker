@@ -1581,7 +1581,7 @@ function openWalkDetail(t) {
   const base = t.original || t.points;
   const [i0, i1] = t.trim || [0, base.length - 1];
   walkOpen = { track: t, i0, i1 };
-  const d = walkDetails(t.points);
+  const d = walkDetails(t.points, t.breaks);
   const n = city.newByTrack.get(t.id) || 0;
   $('#wd-title').textContent = new Date(t.startedAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   $('#wd-dist').textContent = km(d.distance);

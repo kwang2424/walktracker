@@ -308,7 +308,14 @@ forCases('walk numbers add up, and trimming can always be undone', async (r) => 
   const w = randomWalk(r, g, { noise: r.range(0, 8) });
   if (w.points.length < 3) return; // the app only offers trimming on real walks
   const d = walkDetails(w.points);
-  assert.ok(Math.abs(d.distance - polylineLength(w.points)) < 0.01);
+  assert.ok(d.distance <= polylineLength(w.points) + 0.01, 'walk distance longer than the GPS line');
+  // With realistic GPS (a few meters off), the walk's length is close to the
+  // route really walked, spikes and dropouts aside.
+  const calm = randomWalk(r, g, { noise: 2, extras: false }); // spikes are removed earlier, by the GPS clean-up
+  let routeLen = 0;
+  for (let k = 1; k < calm.route.length; k++) routeLen += Math.hypot((calm.route[k][0] - calm.route[k - 1][0]) * g.dx, (calm.route[k][1] - calm.route[k - 1][1]) * g.dy);
+  const calmLen = walkDetails(calm.points).distance;
+  if (routeLen > 200) assert.ok(calmLen > routeLen * 0.75 && calmLen < routeLen * 1.25, `walk distance ${Math.round(calmLen)} m for a ${Math.round(routeLen)} m route`);
   assert.ok(d.movingMs <= d.totalMs + 1, 'moving time longer than the walk');
   const splitSum = d.splits.reduce((n, s) => n + s.ms, 0);
   assert.ok(splitSum <= d.totalMs + 1, 'splits add up to more than the walk');

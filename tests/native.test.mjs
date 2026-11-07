@@ -12,13 +12,15 @@ test('a walk recorded by the phone becomes a saved walk', () => {
     id: 'ABC',
     startedAt: t0,
     endedAt: t0 + 600000,
-    points: [[40.73, -73.99, t0], [40.731, -73.99, t0 + 300000], [40.732, -73.99, t0 + 600000]],
+    // 222 m north at walking pace, a fix every ~4 m (as the phone sends them).
+    points: Array.from({ length: 56 }, (_, i) => [40.73 + (0.002 * i) / 55, -73.99, t0 + i * 3000]),
   });
   assert.equal(t.source, 'auto');
   assert.equal(t.nativeId, 'ABC');
   assert.equal(t.duration, 600000);
-  assert.equal(t.points.length, 3);
-  assert.ok(Math.abs(t.distance - 222.4) < 1, `distance ${t.distance}`);
+  assert.equal(t.points.length, 56);
+  assert.ok(Math.abs(t.distance - 222.4) < 9, `distance ${t.distance}`);
+  assert.equal(t.breaks, undefined);
   assert.match(t.name, /^Walk on /);
 });
 

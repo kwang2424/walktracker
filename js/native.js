@@ -1,8 +1,8 @@
 // When WalkTracker runs inside its iPhone app (see ios/), the app supplies GPS
 // that keeps working in the background, and can record walks by itself while
 // the app is closed. In a normal browser `native` is null and none of this applies.
-import { polylineLength } from './geo.js';
 import { cleanTrack } from './track.js';
+import { isGap, walkDistance } from './walkstats.js';
 
 export const native = (typeof window !== 'undefined' && window.walktrackerNative) || null;
 
@@ -47,13 +47,17 @@ export function nativeWalkToTrack(w, source = 'auto') {
       if (points.length) breaks.push(points.length);
       points.push(...clean.map(([lat, lon, t]) => [lat, lon, t]));
     }
+    // A gap in the middle (over a minute, or a jump faster than walking: a
+    // short ride the phone skipped) splits the walk, so nothing joins across it.
+    for (let i = 1; i < points.length; i++) if (isGap(points[i - 1], points[i]) && !breaks.includes(i)) breaks.push(i);
+    breaks.sort((a, b) => a - b);
   }
   return {
     name: `Walk on ${new Date(w.startedAt).toLocaleDateString([], { weekday: 'long' })}`,
     startedAt: w.startedAt,
     endedAt: w.endedAt,
     duration: w.endedAt - w.startedAt,
-    distance: polylineLength(points),
+    distance: walkDistance(points, breaks),
     points,
     source, // 'auto' (recorded by the phone) or 'health' (Apple Health)
     nativeId: w.id,

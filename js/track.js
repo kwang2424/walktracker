@@ -93,6 +93,8 @@ export class LiveFilter {
 
   push(point) {
     const [lat, lon, t, acc = DEFAULT_ACC] = point;
+    // Without a time there's no speed to reason about: pass it through as is.
+    if (!Number.isFinite(t)) return point;
     const r = Math.max(acc, 3) ** 2;
     if (!this.project) {
       this.project = makeProjector(lat);

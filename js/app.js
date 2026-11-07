@@ -1585,9 +1585,9 @@ function openWalkDetail(t) {
   const n = city.newByTrack.get(t.id) || 0;
   $('#wd-title').textContent = new Date(t.startedAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   $('#wd-dist').textContent = km(d.distance);
-  $('#wd-moving').textContent = minutes(d.movingMs);
+  $('#wd-moving').textContent = d.timed ? minutes(d.movingMs) : '–';
   $('#wd-pace').textContent = formatPace(d.pace);
-  $('#wd-sub').textContent = [`${minutes(d.totalMs)} in all`, `${n} new block${n === 1 ? '' : 's'}`,
+  $('#wd-sub').textContent = [d.timed ? `${minutes(d.totalMs)} in all` : 'No times recorded', `${n} new block${n === 1 ? '' : 's'}`,
     t.steps ? `${t.steps.toLocaleString()} steps` : '', SOURCE_LABEL[t.source] || '', t.original ? 'trimmed' : '']
     .filter(Boolean).join(' · ');
   // Splits: a bar per kilometer, longer = slower.

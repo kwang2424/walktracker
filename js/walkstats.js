@@ -6,6 +6,10 @@ const MOVING_MIN = 0.4; // m/s: slower than this counts as stopped (waiting at a
 const MAX_STEP_GAP = 60000; // ms: longer gaps in the GPS aren't counted as moving
 
 export function walkDetails(points) {
+  // Some imported walks (GPX files from some apps) have no times: then only
+  // the distance is known.
+  const timed = points.length > 1 && points.every((p) => Number.isFinite(p[2]));
+  if (!timed) return { distance: polylineLength(points), totalMs: 0, movingMs: 0, pace: 0, splits: [], timed: false };
   let distance = 0, movingMs = 0;
   const splits = []; // { km, ms } for each full kilometer, then the rest
   let splitStart = points[0]?.[2], splitDist = 0;
@@ -28,7 +32,7 @@ export function walkDetails(points) {
   const end = points[points.length - 1]?.[2];
   if (splitDist >= 100 && end != null) splits.push({ km: splits.length + splitDist / 1000, ms: end - splitStart, full: false, meters: splitDist });
   const totalMs = points.length > 1 ? end - points[0][2] : 0;
-  return { distance, totalMs, movingMs, pace: distance > 0 ? movingMs / (distance / 1000) : 0, splits };
+  return { distance, totalMs, movingMs, pace: distance > 0 ? movingMs / (distance / 1000) : 0, splits, timed: true };
 }
 
 // "12:34" per km.

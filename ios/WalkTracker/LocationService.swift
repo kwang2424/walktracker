@@ -129,8 +129,9 @@ final class LocationService: NSObject {
 
     func watch(id: Int) {
         watches.insert(id)
-        // A walk started in the app takes over from auto-tracking.
-        if journal.current != nil { finishAutoWalk() }
+        // A walk started in the app takes over from auto-tracking (its Lock
+        // Screen card goes away right away, for the new walk's).
+        if journal.current != nil { finishAutoWalk(dismissCard: true) }
         askForLocation()
         updateMode()
         // Points recorded while the web app wasn't running (e.g. it was reloaded).
@@ -259,14 +260,14 @@ final class LocationService: NSObject {
         finishAutoWalk()
     }
 
-    private func finishAutoWalk() {
+    private func finishAutoWalk(dismissCard: Bool = false) {
         finishTimer?.invalidate()
         watchdog?.invalidate()
         watchdog = nil
         offFootSince = nil
         let distance = journal.current?.distance ?? 0
         let walk = journal.finishCurrent()
-        WalkActivity.shared.end(distance: walk?.distance ?? distance, newBlocks: nil, dismiss: walk == nil)
+        WalkActivity.shared.end(distance: walk?.distance ?? distance, newBlocks: nil, dismiss: dismissCard || walk == nil)
         if let walk, UIApplication.shared.applicationState != .active {
             // On screen, the page shows its own summary card instead.
             WalkNotifier.walkRecorded(distance: walk.distance, duration: (walk.endedAt - walk.startedAt) / 1000)

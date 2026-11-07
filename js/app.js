@@ -11,7 +11,7 @@ import { drawBadge } from './placeicons.js';
 import { LiveFilter, isRiding } from './track.js';
 import { ZONE_SIZES, BLOCK_PAD, inZone, withoutZones, runsOf } from './zones.js';
 import { blockAround } from './blockface.js';
-import { walkDetails, formatPace, trimWalk, untrimWalk } from './walkstats.js';
+import { walkDetails, formatPace, trimWalk, untrimWalk, overlapsSaved } from './walkstats.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, overrideWalked } from './city.js';
 import { KeepAwake, isIOS } from './awake.js';
@@ -1626,6 +1626,8 @@ function previewTrim() {
   }
   Object.assign(walkOpen, { i0, i1 });
   view.setTrim(base, i0, i1);
+  const n = Math.max(1, base.length - 1);
+  Object.assign($('#wd-keep-bar').style, { left: `${(100 * i0) / n}%`, width: `${(100 * (i1 - i0)) / n}%` });
   const kept = polylineLength(base.slice(i0, i1 + 1));
   const at = (p) => (p[2] ? new Date(p[2]).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '');
   $('#wd-trim-info').textContent = `Keeps ${km(kept)} of ${km(polylineLength(base))} · ${at(base[i0])} to ${at(base[i1])}`;
@@ -1896,6 +1898,7 @@ async function importNativeWalks() {
     if (have.has(w.id) || w.points.length < 2) continue;
     const t = nativeWalkToTrack(w);
     if (t.points.length < 2) continue; // nothing usable (e.g. all underground)
+    if (overlapsSaved(t, tracks)) continue; // already saved (e.g. from Apple Health)
     t.id = await db.put('tracks', t);
     tracks.push(t);
     added.push(t);
@@ -2011,6 +2014,7 @@ async function importHealth({ quiet = false, rebuildAfter = true } = {}) {
       for (const w of res.walks) {
         if (have.has(w.id)) continue;
         const t = nativeWalkToTrack(w, 'health');
+        if (overlapsSaved(t, tracks)) { have.add(w.id); continue; } // the phone (or you) already recorded this walk
         t.id = await db.put('tracks', t);
         tracks.push(t);
         have.add(w.id);

@@ -152,7 +152,10 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .wd-split .bar div { height: 100%; border-radius: 4px; background: var(--track); }
 #wd-trim summary { font-weight: 600; color: var(--accent); cursor: pointer; padding: 6px 0; }
 .wd-range { display: grid; grid-template-columns: 44px 1fr; align-items: center; gap: 8px; margin: 6px 0; font-size: 13px; }
-.wd-range input { width: 100%; accent-color: var(--accent); }
+.wd-range input { width: 100%; accent-color: var(--muted); }
+/* The part of the walk being kept, above the two sliders. */
+.wd-keep { position: relative; height: 6px; margin: 6px 0 2px 52px; border-radius: 3px; background: var(--line); }
+.wd-keep div { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--accent); }
 #zone-edit .segmented { margin: 10px 0 12px; }
 #zone-edit .zone-shape { grid-template-columns: 1fr 1fr; margin: 10px 0 4px; }
 #zone-edit .zone-shape span { display: none; }

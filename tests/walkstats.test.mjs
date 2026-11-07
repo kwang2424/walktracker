@@ -38,3 +38,13 @@ test('trimming keeps the chosen part and can be undone', () => {
   assert.equal(back.original, undefined);
   assert.equal(back.id, 3);
 });
+
+test('a walk recorded twice (phone and Apple Watch) is recognized; back-to-back walks are not', async () => {
+  const { overlapsSaved } = await import('../js/walkstats.js');
+  const phone = { startedAt: 1000, endedAt: 1000 + 30 * 60000, points: [] };
+  const watch = { startedAt: 1000 + 2 * 60000, endedAt: 1000 + 31 * 60000, points: [] };
+  const later = { startedAt: 1000 + 29 * 60000, endedAt: 1000 + 60 * 60000, points: [] };
+  assert.equal(overlapsSaved(watch, [phone]), true);
+  assert.equal(overlapsSaved(later, [phone]), false); // a minute of overlap: a new walk
+  assert.equal(overlapsSaved(phone, [phone]), false);
+});

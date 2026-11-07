@@ -35,6 +35,21 @@ export function walkDetails(points) {
   return { distance, totalMs, movingMs, pace: distance > 0 ? movingMs / (distance / 1000) : 0, splits, timed: true };
 }
 
+// Is this walk the same walk as one already saved (e.g. an Apple Watch workout
+// imported from Apple Health that the phone also recorded by itself)? You can't
+// be on two walks at once: more than half of the shorter one at the same time.
+export function overlapsSaved(walk, saved) {
+  const span = (t) => [t.startedAt, t.endedAt ?? t.points?.[t.points.length - 1]?.[2] ?? t.startedAt];
+  const [a0, a1] = span(walk);
+  return saved.some((t) => {
+    if (t === walk || t.inProgress) return false;
+    const [b0, b1] = span(t);
+    const overlap = Math.min(a1, b1) - Math.max(a0, b0);
+    const shorter = Math.min(a1 - a0, b1 - b0);
+    return shorter > 0 && overlap > shorter / 2;
+  });
+}
+
 // "12:34" per km.
 export function formatPace(msPerKm) {
   if (!msPerKm || !Number.isFinite(msPerKm)) return '–';

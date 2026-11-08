@@ -68,3 +68,13 @@ test('points keep their time; smoothing does not invent points', () => {
   const out = cleanTrack(pts);
   assert.deepEqual(out.map((p) => p[2]), pts.map((p) => p[2]));
 });
+
+test('a bike ride right after walking is noticed within seconds', () => {
+  // 40 s of walking (steps), then a bike at 5 m/s with no steps.
+  const walking = walk(40);
+  const last = walking[walking.length - 1];
+  const bike = Array.from({ length: 30 }, (_, i) => [40.73, last[1] + (i + 1) * 5 * M_LON, last[2] + (i + 1) * 1000, 8, last[4]]);
+  const kept = dropRides([...walking, ...bike]);
+  assert.equal(kept.filter((p) => walking.includes(p)).length, walking.length);
+  assert.ok(kept.filter((p) => bike.includes(p)).length <= 12, `${kept.filter((p) => bike.includes(p)).length} bike points kept`);
+});

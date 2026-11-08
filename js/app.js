@@ -8,7 +8,7 @@ import { weeklyChart, calendarChart, stepsChart } from './charts.js';
 import { MapView, BLOCKS_MIN_ZOOM } from './mapview.js';
 import { Places, ROUTE_COLORS } from './places.js';
 import { drawBadge } from './placeicons.js';
-import { LiveFilter, isRiding } from './track.js';
+import { LiveFilter, RideFilter } from './track.js';
 import { ZONE_SIZES, BLOCK_PAD, inZone, withoutZones, runsOf } from './zones.js';
 import { blockAround } from './blockface.js';
 import { walkDetails, formatPace, trimWalk, untrimWalk, overlapsSaved } from './walkstats.js';
@@ -613,7 +613,7 @@ function onPosition(pos) {
   if (!asleep()) showMe(p);
   // In the iPhone app a fix with no speed and over 20 m off is a Wi-Fi or cell
   // position (underground, e.g. a subway station), not real GPS.
-  const wifiFix = native && pos.coords.speed == null && accuracy > 20;
+  const wifiFix = native && pos.coords.speed == null && accuracy > 10;
   if (accuracy > MIN_ACCURACY_M || wifiFix) {
     setGps('weak', `Weak GPS ±${Math.round(accuracy)} m`);
     return;
@@ -625,10 +625,7 @@ function onPosition(pos) {
   }
   // Moved a long way without taking steps (iPhone app only): a train or bus.
   const raw = [latitude, longitude, p[2], accuracy, pos.steps ?? undefined];
-  rec.recent = (rec.recent || []).filter((q) => raw[2] - q[2] <= 45000);
-  rec.recent.push(raw);
-  if (isRiding(rec.recent[0], raw)) {
-    rec.recent = [raw]; // walking right after the ride still counts
+  if (!(rec.rides ||= new RideFilter()).push(raw)) {
     setGps('weak', 'Riding, not walking: not counted');
     return;
   }

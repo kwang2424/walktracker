@@ -50,3 +50,10 @@ test('steps during an automatic walk add up across pedometer restarts', async ()
   assert.equal(stepsOf(pts), 120);
   assert.equal(stepsOf([[0, 0, 0, 5, 1, -1]]), null);
 });
+
+test('station Wi-Fi claiming 12-20 m without a speed is not trusted', async () => {
+  const { usableFix } = await import('../js/native.js');
+  assert.equal(usableFix(15, -1), false); // Wi-Fi: no speed
+  assert.equal(usableFix(8, -1), true); // GPS-like accuracy
+  assert.equal(usableFix(15, 1.2), true); // real GPS (has a speed)
+});

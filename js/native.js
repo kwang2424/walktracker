@@ -10,7 +10,7 @@ export const native = (typeof window !== 'undefined' && window.walktrackerNative
 // Points may carry accuracy and speed (newer app versions): drop Wi-Fi/cell
 // positions (underground, indoors) and train-speed fixes, as the app does.
 export const usableFix = (acc, speed) =>
-  acc == null || (acc >= 0 && acc <= 35 && !(speed > 7) && (acc <= 20 || speed >= 0));
+  acc == null || (acc >= 0 && acc <= 35 && !(speed > 7) && (acc <= 10 || speed >= 0));
 
 // Steps during a walk: the phone's running count is in each point (index 5,
 // -1 if unknown); it restarts when GPS does, so add up only the increases.

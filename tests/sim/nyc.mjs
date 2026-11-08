@@ -79,6 +79,15 @@ export function route(graph, from, to, { streetsOnly = false } = {}) {
   return { coords, edges: legs.map((l) => l.edge.id) };
 }
 
+// Meters from point p to segment a-b (all [lat, lon]).
+function segDistM(p, a, b) {
+  const pr = makeProjector(p[0]);
+  const [P, A, B] = [pr(p), pr(a), pr(b)];
+  const dx = B[0] - A[0], dy = B[1] - A[1], l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((P[0] - A[0]) * dx + (P[1] - A[1]) * dy) / l2)) : 0;
+  return Math.hypot(A[0] + t * dx - P[0], A[1] + t * dy - P[1]);
+}
+
 // Midtown's tall buildings: where the simulated GPS bounces (multipath).
 export const inCanyon = (p) => p[0] > 40.745 && p[0] < 40.77 && p[1] > -73.995 && p[1] < -73.965;
 
@@ -236,7 +245,7 @@ export function phoneAutoWalks(sim, zones = [], { seed = 7, model = PHONE } = {}
     timers(e.t);
     if (e.kind === 'motion') { handleActivity(e.t, e.m); continue; }
     const f = e.f;
-    const usable = f.acc >= 0 && f.acc <= 35 && !(f.speed > 7) && (f.acc <= 20 || f.speed >= 0);
+    const usable = f.acc >= 0 && f.acc <= 35 && !(f.speed > 7) && (f.acc <= 10 || f.speed >= 0);
     if (!usable) continue;
     lastGoodFixAt = f.t;
     if (inZone([f.lat, f.lon], zones)) { zoneGap = true; continue; }
@@ -324,7 +333,14 @@ export async function scoreDay({ name, plan, zones = [], seed = 1, city, model =
   });
   const extra = extraAll.filter((id) => !harmless.includes(id));
   const fromRides = extra.filter((id) => rode.has(id));
-  const insideZones = [...walked].filter((id) => city.block(id).coords.every((p) => inZone(p, zones)));
+  // Blocks really inside an area (not its edges: a block-shaped area is traced
+  // along the streets around it, and those still count from across the street).
+  const deepInside = (b) => zones.some((z) => {
+    const mid = b.coords[Math.floor(b.coords.length / 2)];
+    if (!z.ring) return haversine(mid, [z.lat, z.lon]) < z.r - 30;
+    return inZone(mid, [{ ...z, pad: 0, box: undefined }]) && z.ring.every((p, i) => i === 0 || segDistM(mid, z.ring[i - 1], p) > 20);
+  });
+  const insideZones = [...walked].filter((id) => deepInside(city.block(id)));
   // Walks that swallowed a ride (bus, taxi, bike, subway) and how far each
   // walk's distance is from what was really walked during it.
   const rides = sim.legs.filter((l) => !['walk', 'run', 'stay'].includes(l.mode));

@@ -12,24 +12,73 @@
 //    flatten out, and single far-off fixes ("spikes") are dropped.
 import { haversine, makeProjector } from './geo.js';
 
-const RIDE_WINDOW_MS = 45000; // look back this far when comparing distance and steps
+const RIDE_WINDOW_MS = 45000; // look back this far when comparing distance and steps...
+const RIDE_SHORT_MS = 10000; // ...and this far, to notice a bike or car within seconds (walking never covers 30 m in 10 s)
 const RIDE_MIN_M = 30; // ignore shorter moves (GPS wobble while standing)
 const METERS_PER_STEP_MAX = 3; // walking and running stay well under this
 
-// Returns a new list without the points reached by riding rather than walking.
-export function dropRides(points) {
-  const out = [];
-  let j = 0;
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    while (j < i && p[2] - points[j][2] > RIDE_WINDOW_MS) j++;
-    if (isRiding(points[j], p)) {
-      j = i; // look back no further than the ride, so walking right after it counts
-      continue;
-    }
-    out.push(p);
+const RESUME_MS = 8000; // after a ride: walking again once there are RESUME_STEPS steps in this long
+const RESUME_STEPS = 8;
+
+// Point by point (a live walk) or over a whole list: push() says whether a
+// point was walked (true) or reached by riding (false).
+export class RideFilter {
+  constructor() {
+    this.pts = []; // the last RIDE_WINDOW_MS of points
+    this.riding = false;
   }
-  return out;
+
+  push(p) {
+    const pts = this.pts;
+    pts.push(p);
+    while (pts.length > 1 && p[2] - pts[0][2] > RIDE_WINDOW_MS) pts.shift();
+    const i = pts.length - 1;
+    const back = (ms) => { let k = 0; while (k < i && p[2] - pts[k][2] > ms) k++; return k; };
+    if (this.riding) {
+      const a = pts[back(RESUME_MS)];
+      const unknown = p[4] == null || a[4] == null;
+      const walking = !unknown && a !== p && p[4] - a[4] >= RESUME_STEPS && !isRiding(a, p);
+      if (!unknown && !walking) return false;
+      this.riding = false;
+      this.pts = [p]; // look back no further than the ride, so walking right after it counts
+      return true;
+    }
+    // The long look-back catches slow rides; the short one catches the start
+    // of a ride quickly (steps walked just before don't hide it).
+    const j = 0, k = back(RIDE_SHORT_MS);
+    if ((isRiding(pts[j], p) && smooth(pts, j, i, 15000)) || (startedRiding(pts[k], p) && smooth(pts, k, i, 8000))) {
+      this.riding = true;
+      return false;
+    }
+    return true;
+  }
+}
+
+// Returns a new list without the points reached by riding rather than walking.
+// Once a ride is noticed, points stay dropped until the steps say you're
+// walking again (a few steps in the last few seconds, at walking pace).
+export function dropRides(points) {
+  const f = new RideFilter();
+  return points.filter((p) => f.push(p));
+}
+
+// A ride covers its distance smoothly. GPS bouncing (off tall buildings, say)
+// covers it in one leap: if one step is most of the distance, or there's too
+// little history to judge from, it's not a ride.
+function smooth(points, from, to, minMs) {
+  if (points[to][2] - points[from][2] < minMs) return false;
+  const d = haversine(points[from], points[to]);
+  for (let i = from + 1; i <= to; i++) if (haversine(points[i - 1], points[i]) > 0.6 * d) return false;
+  return true;
+}
+
+// The start of a ride: 30+ m in the last few seconds with (almost) no steps at
+// all. Stricter than isRiding, so GPS jumping around a walker (whose steps keep
+// coming) never looks like one.
+function startedRiding(a, b) {
+  if (!a || a === b || a[4] == null || b[4] == null) return false;
+  const steps = b[4] - a[4];
+  return steps >= 0 && steps <= 3 && haversine(a, b) >= RIDE_MIN_M;
 }
 
 // Was the move from a to b made without walking? Unknown (no step counts) = no.

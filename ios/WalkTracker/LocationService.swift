@@ -48,7 +48,9 @@ final class LocationService: NSObject {
         let acc = l.horizontalAccuracy
         guard acc >= 0, acc <= 35 else { return false }
         if l.speed > 7 { return false }
-        return acc <= 20 || l.speed >= 0
+        // No speed means Wi-Fi or cell positioning (a station's Wi-Fi can claim
+        // 12-20 m): only trust it when it claims GPS-like accuracy.
+        return acc <= 10 || l.speed >= 0
     }
 
     private enum Mode { case off, idle, precise }

@@ -39,3 +39,41 @@ test('the simulation catches walks that run on through rides (the old timer rule
   }
   assert.ok(swallowed > 0, 'with the old rule some walk should have run on through a ride');
 });
+
+// Finishing a walk (Finish walk on an automatic walk's card, or Finish on one
+// you started) while still walking must not start a new automatic walk right
+// away; stopping for a couple of minutes and walking again must.
+const { loadCity, route, simulate, phoneAutoWalks, FINISH_BEFORE } = await import('./nyc.mjs');
+const home = [40.6852, -73.9843], hall = [40.6928, -73.9903], there = [40.6880, -73.9790], corner = [40.6905, -73.9870];
+const R = (a, b) => route(city.graph, a, b);
+const afterFinish = (plan, model) => {
+  const out = [];
+  for (let seed = 1; seed <= 15; seed++) {
+    const sim = simulate(plan, { seed });
+    const done = sim.actions.find((a) => a.do === 'finishAuto' || a.do === 'finishWalk').t;
+    out.push(phoneAutoWalks(sim, [], { seed, model }).filter((w) => w.startedAt > done).length);
+  }
+  return out;
+};
+const keepWalking = {
+  card: [{ mode: 'walk', route: R(home, hall) }, { mode: 'action', do: 'finishAuto' }, { mode: 'walk', route: R(hall, there) }, { mode: 'stay', at: there, minutes: 10 }],
+  app: [{ mode: 'stay', at: home, minutes: 1 }, { mode: 'action', do: 'startWalk' }, { mode: 'walk', route: R(home, hall) }, { mode: 'action', do: 'finishWalk' },
+    { mode: 'walk', route: R(hall, there) }, { mode: 'stay', at: there, minutes: 10 }],
+};
+
+test('finishing a walk while still walking does not start a new one', () => {
+  for (const [how, plan] of Object.entries(keepWalking)) {
+    assert.deepEqual(afterFinish(plan, PHONE).filter(Boolean), [], `finished ${how === 'card' ? 'on the card' : 'in the app'}: a new walk started`);
+  }
+});
+
+test('after finishing, a real stop and walking again starts a new walk', () => {
+  const plan = [{ mode: 'walk', route: R(home, hall) }, { mode: 'action', do: 'finishAuto' }, { mode: 'walk', route: R(hall, corner) },
+    { mode: 'stay', at: corner, minutes: 3 }, { mode: 'walk', route: R(corner, there) }, { mode: 'stay', at: there, minutes: 5 }];
+  assert.deepEqual(afterFinish(plan, PHONE).filter((n) => n !== 1), []);
+});
+
+test('the simulation catches the old finish rules (new walks right after finishing)', () => {
+  const old = { ...PHONE, ...FINISH_BEFORE };
+  assert.ok(afterFinish(keepWalking.app, old).some(Boolean) && afterFinish(keepWalking.card, old).some(Boolean));
+});

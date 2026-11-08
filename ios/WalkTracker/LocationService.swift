@@ -102,7 +102,14 @@ final class LocationService: NSObject {
     private lazy var zoneCache: [Zone] = zones
 
     private var zoneGap = false
+    /// After you finish a walk (on its card, or one you started in the app),
+    /// no automatic walk starts until you've really stopped: not walking for
+    /// at least `stopToResume` (the sensor's brief blips mid-walk don't count).
     private var waitForStop = false
+    private var stopSince: Date? // the current still spell began
+    private var stillTotal: TimeInterval = 0 // time still so far, across short blips
+    private var walkSince: Date? // walking again since (under 20 s: just a blip, the stop goes on)
+    private static var stopToResume: TimeInterval { stopAfter } // a stop long enough to end a walk
 
     private func inZone(_ l: CLLocation) -> Bool {
         zoneCache.contains { $0.contains(l) }
@@ -143,6 +150,14 @@ final class LocationService: NSObject {
 
     func clearWatch(id: Int) {
         watches.remove(id)
+        // You finished a walk in the app: don't start an automatic one right
+        // away if you're still walking.
+        if watches.isEmpty && autoTrack {
+            waitForStop = true
+            stopSince = nil
+            stillTotal = 0
+            walkSince = nil
+        }
         if watches.isEmpty { journal.clearOutbox() }
         updateMode()
     }
@@ -221,7 +236,25 @@ final class LocationService: NSObject {
         if onFoot || activity.stationary { inVehicle = false }
         // After you finish a walk by hand, wait until you've stopped before the
         // next one can start (or it would restart right away).
-        if !(activity.walking || activity.running) { waitForStop = false }
+        if waitForStop {
+            // Add up the time actually spent still; walking for 20 s or more
+            // starts the count again (two red lights aren't one long stop).
+            let now = Date()
+            if !(activity.walking || activity.running) {
+                if let w = walkSince, now.timeIntervalSince(w) >= 20 { stillTotal = 0 }
+                walkSince = nil
+                if stopSince == nil { stopSince = now }
+            } else {
+                if let since = stopSince { stillTotal += now.timeIntervalSince(since); stopSince = nil }
+                if stillTotal >= Self.stopToResume {
+                    waitForStop = false // stopped long enough: this is a new walk
+                    stillTotal = 0
+                    walkSince = nil
+                } else if walkSince == nil {
+                    walkSince = now
+                }
+            }
+        }
         if onFoot {
             offFootSince = nil
             finishTimer?.invalidate()
@@ -287,6 +320,9 @@ final class LocationService: NSObject {
     func finishAutoWalkNow() {
         guard journal.current != nil else { return }
         waitForStop = true
+        stopSince = nil
+        stillTotal = 0
+        walkSince = nil
         finishAutoWalk()
     }
 

@@ -102,6 +102,7 @@ export function simulate(plan, { seed = 1, start = Date.UTC(2026, 10, 9, 12, 0) 
   const fixes = []; // { lat, lon, t, acc, speed, steps, motion }
   const motions = []; // { t, m }: the true activity, once a second
   const legs = []; // { mode, from, to, meters }
+  const actions = []; // { t, do }: taps in the app (see 'action' legs)
   let t = start, steps = 0;
   let last = null;
   let multipath = null; // { until, dx, dy }: tall buildings bouncing the signal
@@ -143,6 +144,9 @@ export function simulate(plan, { seed = 1, start = Date.UTC(2026, 10, 9, 12, 0) 
   for (const leg of plan) {
     const legStart = t;
     let legMeters = 0;
+    // A tap in the app, at this moment: 'finishAuto' (Finish walk on an
+    // automatic walk's card), 'startWalk' / 'finishWalk' (Start walk, Finish).
+    if (leg.mode === 'action') { actions.push({ t, do: leg.do }); continue; }
     if (leg.mode === 'stay') {
       // Inside a building (office, shop): GPS drifts around it.
       const until = t + leg.minutes * 60000;
@@ -188,7 +192,7 @@ export function simulate(plan, { seed = 1, start = Date.UTC(2026, 10, 9, 12, 0) 
     void project;
     legs.push({ mode: leg.mode, from: legStart, to: t, meters: legMeters });
   }
-  return { fixes, motions, legs, end: t };
+  return { fixes, motions, legs, actions, end: t };
 }
 
 // The iPhone app's automatic-walk rules, as written in LocationService.swift,
@@ -202,7 +206,7 @@ export function phoneAutoWalks(sim, zones = [], { seed = 7, model = PHONE } = {}
   const r = rng(seed);
   const walks = [];
   let cur = null, offFootSince = null, inVehicle = false, zoneGap = false, waitForStop = false;
-  let lastGoodFixAt = 0, finishAt = null, nextWatchdog = null;
+  let lastGoodFixAt = 0, finishAt = null, nextWatchdog = null, watching = false, stopSince = null, walkSince = null, stillTotal = 0;
   const finishCurrent = (t) => {
     if (!cur) return;
     let dist = 0;
@@ -219,6 +223,10 @@ export function phoneAutoWalks(sim, zones = [], { seed = 7, model = PHONE } = {}
     get finishAt() { return finishAt; }, set finishAt(v) { finishAt = v; },
     get inVehicle() { return inVehicle; }, set inVehicle(v) { inVehicle = v; },
     get waitForStop() { return waitForStop; }, set waitForStop(v) { waitForStop = v; },
+    get stopSince() { return stopSince; }, set stopSince(v) { stopSince = v; },
+    get walkSince() { return walkSince; }, set walkSince(v) { walkSince = v; },
+    get stillTotal() { return stillTotal; }, set stillTotal(v) { stillTotal = v; },
+    get watching() { return watching; },
     stopAfter: model.stopAfter,
   });
   // Events in time order.
@@ -229,7 +237,8 @@ export function phoneAutoWalks(sim, zones = [], { seed = 7, model = PHONE } = {}
     if (m !== prev || r.next() < (model.flicker[m] ?? 0)) reported.push({ t: at, m });
     prev = m;
   }
-  const events = [...reported.map((e) => ({ ...e, kind: 'motion' })), ...sim.fixes.map((f) => ({ t: f.t, f, kind: 'fix' }))].sort((a, b) => a.t - b.t);
+  const events = [...reported.map((e) => ({ ...e, kind: 'motion' })), ...sim.fixes.map((f) => ({ t: f.t, f, kind: 'fix' })),
+    ...(sim.actions || []).map((a) => ({ ...a, kind: 'action' }))].sort((a, b) => a.t - b.t);
   const timers = (t) => {
     // The "stopped walking" timer firing (finishIfOffFoot), and the watchdog.
     if (cur && finishAt != null && t >= finishAt) {
@@ -244,6 +253,13 @@ export function phoneAutoWalks(sim, zones = [], { seed = 7, model = PHONE } = {}
   for (const e of events) {
     timers(e.t);
     if (e.kind === 'motion') { handleActivity(e.t, e.m); continue; }
+    if (e.kind === 'action') {
+      // finishAutoWalkNow(), watch(id:) and clearWatch(id:) in LocationService.swift.
+      if (e.do === 'finishAuto' && cur) { waitForStop = true; stopSince = null; walkSince = null; stillTotal = 0; finishCurrent(e.t); }
+      if (e.do === 'startWalk') { watching = true; if (cur) finishCurrent(e.t); }
+      if (e.do === 'finishWalk') { watching = false; model.onWatchEnd?.({ set waitForStop(v) { waitForStop = v; }, set stopSince(v) { stopSince = v; }, set walkSince(v) { walkSince = v; }, set stillTotal(v) { stillTotal = v; } }); }
+      continue;
+    }
     const f = e.f;
     const usable = f.acc >= 0 && f.acc <= 35 && !(f.speed > 7) && (f.acc <= 10 || f.speed >= 0);
     if (!usable) continue;
@@ -272,7 +288,7 @@ export const SWIFT_BEFORE = (s) => {
   if (onFoot) {
     s.offFootSince = null;
     s.finishAt = null;
-    if (!s.cur && !s.waitForStop) s.begin();
+    if (!s.cur && !s.waitForStop && !s.watching) s.begin();
   } else if (s.cur) {
     if (s.offFootSince == null) s.offFootSince = s.t;
     s.finishAt = s.t + s.stopAfter * 1000; // scheduleFinishCheck(): restarts the timer
@@ -284,17 +300,50 @@ export const SWIFT_NOW = (s) => {
   const onFoot = s.m === 'walking' || s.m === 'running';
   if (s.m === 'automotive' || s.m === 'cycling') s.inVehicle = true;
   if (onFoot || s.m === 'stationary') s.inVehicle = false;
-  if (!onFoot) s.waitForStop = false;
+  if (s.waitForStop) {
+    if (!onFoot) {
+      if (s.walkSince != null && s.t - s.walkSince >= 20000) s.stillTotal = 0;
+      s.walkSince = null;
+      if (s.stopSince == null) s.stopSince = s.t;
+    } else {
+      if (s.stopSince != null) { s.stillTotal = (s.stillTotal || 0) + (s.t - s.stopSince); s.stopSince = null; }
+      if ((s.stillTotal || 0) >= s.stopAfter * 1000) { s.waitForStop = false; s.stillTotal = 0; s.walkSince = null; }
+      else if (s.walkSince == null) s.walkSince = s.t;
+    }
+  }
   if (onFoot) {
     s.offFootSince = null;
     s.finishAt = null;
-    if (!s.cur && !s.waitForStop) s.begin();
+    if (!s.cur && !s.waitForStop && !s.watching) s.begin();
   } else if (s.cur && s.offFootSince == null) {
     s.offFootSince = s.t;
     s.finishAt = s.t + s.stopAfter * 1000;
   }
 };
 PHONE.handleActivity = SWIFT_NOW;
+// The finish rules before November 2026, for the regression test: one
+// non-walking update ended the wait, and finishing a walk started in the app
+// didn't wait at all, so a new automatic walk began while you kept walking.
+export const FINISH_BEFORE = {
+  handleActivity: (s) => {
+    const onFoot = s.m === 'walking' || s.m === 'running';
+    if (s.m === 'automotive' || s.m === 'cycling') s.inVehicle = true;
+    if (onFoot || s.m === 'stationary') s.inVehicle = false;
+    if (!onFoot) s.waitForStop = false;
+    if (onFoot) {
+      s.offFootSince = null;
+      s.finishAt = null;
+      if (!s.cur && !s.waitForStop && !s.watching) s.begin();
+    } else if (s.cur && s.offFootSince == null) {
+      s.offFootSince = s.t;
+      s.finishAt = s.t + s.stopAfter * 1000;
+    }
+  },
+  onWatchEnd: () => {},
+};
+
+// clearWatch(id:): finishing a walk started in the app waits for a real stop too.
+PHONE.onWatchEnd = (s) => { s.waitForStop = true; s.stopSince = null; s.walkSince = null; s.stillTotal = 0; };
 
 // The whole thing for one day: what the app ends up counting vs the truth.
 export async function scoreDay({ name, plan, zones = [], seed = 1, city, model = PHONE }) {

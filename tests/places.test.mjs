@@ -58,3 +58,50 @@ test('a break in a walk (a no-tracking area) is never joined to visit a landmark
   assert.ok(places.visits([{ startedAt: 1, points }]).has('L:LP-1'), 'joined, the line passes the landmark');
   assert.ok(!places.visits([{ startedAt: 1, points, breaks: [1] }]).has('L:LP-1'), 'with a break it must not count');
 });
+
+// Public art, a public plaza and a ~200 m bridge running north from 40.7500/-73.9700.
+const more = new Places({
+  ...data,
+  art: [['PA-1', 'Red Cube', 'Isamu Noguchi', '1968', 'Sculpture', 'Marine Midland Plaza', 0, 40.7090, -74.0100]],
+  pops: [['M1', 'Test Atrium', '1 Plaza Way', 'Atrium', '1985', 0, 40.7200, -74.0000]],
+  bridges: [['BR-1', 'Test Bridge', 200, 0, [[40.7500, -73.9700, 40.7518, -73.9700]]]],
+});
+const bridge = more.bridges[0];
+
+test('public art and public spaces count within their radius', () => {
+  const v = more.visits([{ startedAt: 1, points: walk([40.7085, -74.00975], [40.7095, -74.00975]) }]); // ~21 m east
+  assert.ok(v.has('A:PA-1'));
+  assert.ok(!more.visits([{ startedAt: 1, points: walk([40.7085, -74.0094], [40.7095, -74.0094]) }]).has('A:PA-1'), '~50 m away');
+  assert.ok(more.visits([{ startedAt: 1, points: walk([40.7195, -73.99965], [40.7205, -73.99965]) }]).has('P:M1'));
+  assert.equal(more.art.length, 1);
+  assert.equal(more.pops.length, 1);
+});
+
+test('a bridge counts once most of it is walked, across several walks', () => {
+  const lon = -73.9700;
+  const part = (a, b, t0) => ({ startedAt: t0, points: walk([a, lon], [b, lon], 20, t0) });
+  assert.ok(!more.visits([part(40.7500, 40.7506, 0)]).has('B:BR-1'), 'a third of it is not enough');
+  const v = more.visits([part(40.7500, 40.7506, 0), part(40.7506, 40.7513, 1e6)]);
+  assert.ok(v.has('B:BR-1'), 'two walks that together cover most of it count');
+  assert.ok(v.get('B:BR-1') >= 1e6, 'counted when the second walk finished it');
+  assert.ok(more.visits([part(40.7495, 40.7522, 0)]).has('B:BR-1'), 'one walk end to end');
+  assert.ok(!more.visits([{ startedAt: 0, points: walk([40.7500, -73.9690], [40.7518, -73.9690]) }]).has('B:BR-1'), '85 m to the side');
+});
+
+test('a bridge is not crossed over a GPS gap or a break', () => {
+  const pts = [[40.7499, -73.9700, 0], [40.7519, -73.9700, 60000]]; // one 220 m jump
+  assert.ok(!more.visits([{ startedAt: 0, points: pts }]).has('B:BR-1'));
+  const full = walk([40.7495, -73.9700], [40.7522, -73.9700], 20);
+  const breaks = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+  assert.ok(!more.visits([{ startedAt: 0, points: full, breaks }]).has('B:BR-1'));
+});
+
+test('live crossing reaches the same answer as a whole walk', () => {
+  const pts = walk([40.7495, -73.9700], [40.7522, -73.9700], 30);
+  const cover = new Map();
+  let at = null;
+  for (let i = 1; i < pts.length; i++) if (more.crossed(pts[i - 1], pts[i], cover).length) at ??= pts[i][2];
+  assert.equal(at, more.visits([{ startedAt: 0, points: pts }]).get('B:BR-1'));
+  assert.equal(more.bridgeShare(bridge, cover), 1);
+  assert.ok(more.crossed(pts[0], pts[1], cover).length === 0, 'reported once');
+});

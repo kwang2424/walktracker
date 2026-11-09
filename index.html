@@ -191,6 +191,9 @@
     <span><i class="sw sw-path"></i>Path</span>
     <span data-kind="landmark"><img class="badge-ic" alt="">Landmark</span>
     <span data-kind="station"><img class="badge-ic" alt="">Station</span>
+    <span data-kind="art"><img class="badge-ic" alt="">Art</span>
+    <span data-kind="pops"><img class="badge-ic" alt="">Plaza</span>
+    <span data-kind="bridge"><img class="badge-ic" alt="">Bridge</span>
   </div>
 
   <div id="toast" role="status" aria-live="polite"></div>
@@ -307,15 +310,15 @@
         <div class="tiles" id="place-tiles"></div>
         <h3>Subway lines</h3>
         <ul class="list" id="line-list"></ul>
-        <h3>Landmarks &amp; stations</h3>
-        <div class="search"><input id="place-search" type="search" placeholder="Search landmarks and stations" autocomplete="off"></div>
+        <h3>Places</h3>
+        <div class="search"><input id="place-search" type="search" placeholder="Search places, artists, addresses" autocomplete="off"></div>
         <div class="filters" id="place-filters">
           <button data-f="near" aria-pressed="true">Near the map</button>
           <button data-f="visited" aria-pressed="false">Visited</button>
           <button data-f="todo" aria-pressed="false">Not yet</button>
         </div>
         <ul class="list" id="place-list"></ul>
-        <p class="muted small credit">Landmarks: NYC Landmarks Preservation Commission. Stations: MTA. A landmark counts when you pass within 40 m of it, a station within 60 m.</p>
+        <p class="muted small credit">Tap a tile above to list just that kind. Landmarks: NYC Landmarks Preservation Commission. Stations: MTA. Public art: NYC Parks. Public spaces: NYC Department of City Planning. Bridges: OpenStreetMap. A landmark counts when you pass within 40 m of it, a station within 60 m, art within 30 m, a public space within 35 m, and a bridge once you’ve walked 60% of it (on one walk or several).</p>
       </div>
 
       <div id="awards-view" hidden>
@@ -385,6 +388,12 @@
           <input type="checkbox" class="switch" data-setting="showLandmarks"></label>
         <label class="setting"><span><b>Show subway stations</b><small>Purple badges for every station, filled once you’ve passed one.</small></span>
           <input type="checkbox" class="switch" data-setting="showStations"></label>
+        <label class="setting"><span><b>Show public art</b><small>Pink badges for sculptures and murals in parks and plazas.</small></span>
+          <input type="checkbox" class="switch" data-setting="showArt"></label>
+        <label class="setting"><span><b>Show public spaces</b><small>Teal badges for plazas and atriums open to everyone (privately owned public spaces).</small></span>
+          <input type="checkbox" class="switch" data-setting="showPops"></label>
+        <label class="setting"><span><b>Show bridges</b><small>Blue badges for bridges you can walk across, filled once you have.</small></span>
+          <input type="checkbox" class="switch" data-setting="showBridges"></label>
       </div>
 
       <h3>Your data</h3>

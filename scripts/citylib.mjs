@@ -233,7 +233,53 @@ const centroid = (ring) => {
 // Output (compact arrays, read by js/places.js):
 //   landmarks: [id, name, address, designated, hoodIndex, [[lon, lat, lon, lat, ...outline], ...]]
 //   stations:  [complexId, name, [routes], borough, hoodIndex, [lat, lon, ...platforms]]
-export function buildPlaces(landmarksData, stationsData, hoods) {
+// Bridges you can walk across: the walkable ways (streets, sidewalks,
+// promenades) on a named bridge, from extract_streets.py's "bridges". Built
+// from the raw ways, since a bridge's middle is over water, outside every
+// neighborhood. A bridge's pieces are grouped by its name and joined when
+// they touch (within 300 m); it must reach into NYC.
+// Returns [{ name, pieces: [[[lat, lon], ...]], length }].
+const STREETISH = /\b(street|road|avenue|ave|boulevard|blvd|place|lane|drive|parkway|way|terrace)$/i;
+const BRIDGE_ALIASES = { 'Ed Koch Queensboro Bridge': 'Queensboro Bridge', '3rd Avenue Bridge': 'Third Avenue Bridge' };
+export function bridgesFrom(raw, hoods) {
+  const nodes = new Map(raw.nodes.map(([id, la, lo]) => [id, [la, lo]]));
+  const ways = new Map([...raw.ways, ...(raw.paths || [])].map((w) => [w[0], w]));
+  const inNyc = (p) => hoods.some((h) => p[0] >= h.bbox[0] && p[0] <= h.bbox[2] && p[1] >= h.bbox[1] && p[1] <= h.bbox[3] && pointInMultiPolygon(p, h.multi));
+  const near = (a, b) => a.some((p) => b.some((q) => Math.hypot((p[0] - q[0]) * 111000, (p[1] - q[1]) * 84000) < 300));
+  const byName = new Map();
+  for (const [id, name] of raw.bridges || []) {
+    if (!/\bbridge\b|\bfootbridge\b/i.test(name) || STREETISH.test(name) || /closed/i.test(name)) continue;
+    const way = ways.get(id);
+    if (!way) continue;
+    const coords = way[1].map((n) => nodes.get(n)).filter(Boolean);
+    if (coords.length < 2) continue;
+    // "Brooklyn Bridge Promenade" -> "Brooklyn Bridge".
+    let base = name.match(/^(.*?\b(?:Foot)?[Bb]ridge\b(?: No\. \d+)?)/)?.[1] || name;
+    base = BRIDGE_ALIASES[base] || base;
+    if (!byName.has(base)) byName.set(base, []);
+    byName.get(base).push(coords);
+  }
+  const out = [];
+  for (const [name, pieces] of byName) {
+    // Join touching pieces (repeat until nothing more joins).
+    const groups = pieces.map((p) => [p]);
+    for (let joined = true; joined;) {
+      joined = false;
+      for (let i = 0; i < groups.length && !joined; i++) {
+        for (let j = i + 1; j < groups.length && !joined; j++) {
+          if (near(groups[i].flat(), groups[j].flat())) { groups[i].push(...groups.splice(j, 1)[0]); joined = true; }
+        }
+      }
+    }
+    for (const g of groups) {
+      const length = g.reduce((n, c) => n + polylineLength(c), 0);
+      if (length >= 40 && g.some((c) => c.some(inNyc))) out.push({ name, pieces: g, length });
+    }
+  }
+  return out.sort((a, b) => b.length - a.length);
+}
+
+export function buildPlaces(landmarksData, stationsData, hoods, { pops = [], art = [], bridges = [] } = {}) {
   const hoodAt = (pt) => hoods.findIndex((h) => {
     const [s, w, n, e] = h.bbox;
     return pt[0] >= s && pt[0] <= n && pt[1] >= w && pt[1] <= e && pointInMultiPolygon(pt, h.multi);
@@ -261,5 +307,16 @@ export function buildPlaces(landmarksData, stationsData, hoods) {
     const lon = c.points.reduce((s, p) => s + p[1], 0) / c.points.length;
     return [c.id, name, routes, c.borough, hoodAt([lat, lon]), c.points.flat()];
   });
-  return { version: 1, landmarks, stations };
+  // More to collect: privately owned public spaces, public art, bridges.
+  const popsOut = pops.map((p) => [p.id, p.name, p.address, p.type, p.year, hoodAt([p.lat, p.lon]), p.lat, p.lon]);
+  const artOut = art.map((a) => [a.id, a.title, a.artist, a.year, a.type, a.place, hoodAt([a.lat, a.lon]), a.lat, a.lon]);
+  const bridgesOut = bridges.map((b, i) => {
+    const all = b.pieces.flat();
+    const mid = all[Math.floor(all.length / 2)];
+    // Its neighborhood: the middle's, or (over water) the first end on land.
+    let hood = hoodAt(mid);
+    for (const c of all) { if (hood >= 0) break; hood = hoodAt(c); }
+    return [`BR-${i + 1}`, b.name, Math.round(b.length), hood, b.pieces.map((p) => p.flatMap(([la, lo]) => [round(la, 5), round(lo, 5)]))];
+  });
+  return { version: 2, landmarks, stations, pops: popsOut, art: artOut, bridges: bridgesOut };
 }

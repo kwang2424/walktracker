@@ -3,7 +3,7 @@
 // wants [lon, lat], so conversions happen here.
 /* global mapboxgl */
 
-import { drawBadge, badgeName } from './placeicons.js';
+import { drawBadge, badgeName, PLACE_COLORS } from './placeicons.js';
 import { zoneRing } from './zones.js';
 
 const STYLE = 'mapbox://styles/mapbox/standard';
@@ -276,8 +276,9 @@ export class MapView {
         'icon-size': ['interpolate', ['linear'], ['zoom'], 12.5, 0.55, 15, 0.85, 17, 1],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
-        'symbol-sort-key': ['case', ['==', kind, 'station'], 1, 0],
-        'text-field': ['step', ['zoom'], '', 15, ['match', kind, 'station', ['get', 'name'], ''], 17, ['get', 'name']],
+        'symbol-sort-key': ['match', kind, 'station', 2, 'bridge', 1, 0],
+        // Station and bridge names from zoom 15, the rest from 17.
+        'text-field': ['step', ['zoom'], '', 15, ['match', kind, ['station', 'bridge'], ['get', 'name'], ''], 17, ['get', 'name']],
         'text-font': this._fonts(),
         'text-size': ['interpolate', ['linear'], ['zoom'], 15, 10.5, 18, 12.5],
         'text-anchor': 'top',
@@ -306,7 +307,7 @@ export class MapView {
   }
 
   _addBadges() {
-    for (const kind of ['landmark', 'station']) {
+    for (const kind of Object.keys(PLACE_COLORS)) {
       for (const visited of [false, true]) {
         const canvas = drawBadge(kind, visited, { dark: this.look.dark, ratio: 2 });
         const image = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
@@ -333,7 +334,7 @@ export class MapView {
   }
 
   _placeFilter() {
-    const on = Object.entries(this.placeKinds || { landmark: true, station: true }).filter(([, v]) => v).map(([k]) => k);
+    const on = Object.entries(this.placeKinds || { landmark: true, station: true, art: true, pops: true, bridge: true }).filter(([, v]) => v).map(([k]) => k);
     return on.length ? ['in', ['get', 'kind'], ['literal', on]] : ['==', 1, 0];
   }
 

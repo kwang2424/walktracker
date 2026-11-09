@@ -29,12 +29,19 @@ const DEFS = [
   ['stations-all', 'Subway', '🚇', 'Every station', 'Walk past all 445 stations', 'stations', 445],
   ['line-1', 'Subway', '🚉', 'End to end', 'Walk past every station on a line', 'linesDone', 1],
   ['lines-5', 'Subway', '🚉', 'Line collector', 'Walk past every station on 5 lines', 'linesDone', 5],
+  ['art-1', 'Public art', '🎨', 'Art walk', 'Walk past a piece of public art', 'art', 1],
+  ...[10, 50, 200].map((n) => [`art-${n}`, 'Public art', '🎨', `${n} artworks`, `Walk past ${n} pieces of public art`, 'art', n]),
+  ['pops-1', 'Public spaces', '🌳', 'Hidden plaza', 'Visit a privately owned public space', 'pops', 1],
+  ...[10, 50].map((n) => [`pops-${n}`, 'Public spaces', '🌳', `${n} public spaces`, `Visit ${n} privately owned public spaces`, 'pops', n]),
+  ['bridge-1', 'Bridges', '🌉', 'Over the water', 'Walk across a bridge', 'bridges', 1],
+  ['east-river', 'Bridges', '🌉', 'East River sweep', 'Walk across the Brooklyn, Manhattan, Williamsburg and Queensboro bridges', 'eastRiver', 4],
+  ...[10, 25].map((n) => [`bridges-${n}`, 'Bridges', '🌉', `${n} bridges`, `Walk across ${n} bridges`, 'bridges', n]),
 ];
 
 export const ACHIEVEMENTS = DEFS.map(([id, group, icon, title, desc, fact, target]) => ({ id, group, icon, title, desc, fact, target }));
 
 // facts: { blocks, km, streetsDone, hoodsVisited, hoodsHalf, hoodsDone, boroughsVisited, cityPct, bestStreak,
-//          landmarks, stations, linesDone }
+//          landmarks, stations, linesDone, art, pops, bridges, eastRiver }
 export function evaluate(facts) {
   return ACHIEVEMENTS.map((a) => {
     const value = facts[a.fact] ?? 0;
@@ -64,5 +71,9 @@ export function factsFrom({ summary, tracksTotals, streets, walkedByStreet, best
     landmarks: places.landmarks || 0,
     stations: places.stations || 0,
     linesDone: places.linesDone || 0,
+    art: places.art || 0,
+    pops: places.pops || 0,
+    bridges: places.bridges || 0,
+    eastRiver: places.eastRiver || 0,
   };
 }

@@ -61,6 +61,9 @@ async function openApp({ tracks = [], native = null, steps = null, geolocation =
   page.on('dialog', (d) => d.accept());
   const ready = () => page.waitForFunction(() => window.walktracker?.city?.index && window.walktracker.view?.map?.getSource('blocks'), null, { timeout: 30000 });
   await page.goto(site.url);
+  // A startup error inside the app's module doesn't always reach 'pageerror': say so plainly.
+  await page.waitForFunction(() => window.walktracker, null, { timeout: 15000 })
+    .catch(() => { throw new Error(`The app never started (an error while loading app.js?) ${errors.join('; ')}`); });
   await ready();
   if (tracks.length) {
     await page.evaluate(async (list) => { for (const t of list) await walktracker.db.put('tracks', t); }, tracks);
@@ -93,7 +96,7 @@ const savedWalk = (extra = {}) => {
 test('the app opens cleanly with the street data', { timeout: 60000 }, async () => {
   const app = await openApp();
   assert.ok((await app.text('#hud-place-name')).length > 0);
-  assert.equal(await app.page.$$eval('#legend img.badge-ic', (els) => els.length), 2);
+  assert.equal(await app.page.$$eval('#legend img.badge-ic', (els) => els.length), 5);
   assert.deepEqual(app.errors, []);
   await app.close();
 });
@@ -102,6 +105,29 @@ test('a saved walk counts blocks, landmarks and stations', { timeout: 60000 }, a
   const app = await openApp({ tracks: [savedWalk()] });
   await app.page.waitForFunction(() => walktracker.city.summary().walked >= 15, null, { timeout: 30000 });
   await app.page.waitForFunction(() => walktracker.view.placesData.features.filter((f) => f.properties.v).length >= 3, null, { timeout: 15000 });
+  assert.deepEqual(app.errors, []);
+  await app.close();
+});
+
+test('collections: walking the Brooklyn Bridge counts it, and the Places list filters by kind', { timeout: 60000 }, async () => {
+  const t0 = dayAgo();
+  const points = walkAlong([[40.71191, -74.00417], [40.7004, -73.98964]], t0);
+  const app = await openApp({ tracks: [{ name: 'Bridge', startedAt: t0, endedAt: points[points.length - 1][2], points, distance: 1800, source: 'recorded' }] });
+  await app.page.waitForFunction(() => walktracker.places && walktracker.placeVisits.size > 0, null, { timeout: 30000 });
+  const visited = await app.page.evaluate(() => walktracker.places.items.filter((i) => walktracker.placeVisits.has(i.key)).map((i) => `${i.kind}:${i.name}`));
+  assert.ok(visited.includes('bridge:Brooklyn Bridge'), visited.join(', '));
+  assert.ok(await app.page.evaluate(() => walktracker.places.art.length > 700 && walktracker.places.pops.length > 350));
+  // Progress > Places: tap the Bridges tile to list only bridges.
+  await app.page.evaluate(() => { document.querySelector('#btn-menu')?.click(); document.querySelector('[data-tab=progress]')?.click(); document.querySelector('#progress-switch [data-view=places]').click(); });
+  await app.page.waitForSelector('#place-tiles .tile.tap', { state: 'attached' });
+  const tiles = (await app.page.$eval('#place-tiles', (el) => el.innerText)).replace(/\s+/g, ' ');
+  assert.match(tiles, /Public art/);
+  assert.match(tiles, /Bridges\s*1\s*of \d+/);
+  await app.page.evaluate(() => [...document.querySelectorAll('#place-tiles .tile')].find((t) => t.textContent.startsWith('Bridges')).click());
+  await app.page.evaluate(() => document.querySelector('#place-filters [data-f=visited]').click());
+  const list = await app.page.$eval('#place-list', (el) => el.textContent);
+  assert.match(list, /Brooklyn Bridge/);
+  assert.equal(await app.page.$$eval('#place-list li', (els) => els.length), 1, `only bridges listed: ${list}`);
   assert.deepEqual(app.errors, []);
   await app.close();
 });

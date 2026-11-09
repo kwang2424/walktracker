@@ -9,7 +9,8 @@ kept. The output is one JSON file read by build_city.mjs:
 
     {"nodes": [[id, lat, lon], ...],
      "ways": [[id, [node ids], name, highway], ...],    streets (blocks)
-     "paths": [[id, [node ids], name, kind], ...]}     park paths, trails, plazas
+     "paths": [[id, [node ids], name, kind], ...],     park paths, trails, plazas
+     "bridges": [[way id, name], ...]}                 which of those are on a named bridge
 """
 import json
 import os
@@ -102,6 +103,7 @@ class Reader(osmium.SimpleHandler):
         super().__init__()
         self.ways = {}  # id -> ([node ids], name, highway)
         self.paths = {}  # id -> ([node ids], name, kind)
+        self.bridges = {}  # id -> name: walkable ways on a named bridge (for the bridges collection)
         self.nodes = {}  # id -> (lat, lon)
         self.bbox = None  # [south, west, north, east] of the region being read
 
@@ -123,6 +125,9 @@ class Reader(osmium.SimpleHandler):
         for ref, lat, lon in pts:
             self.nodes[ref] = (round(lat, 6), round(lon, 6))
         ids = [ref for ref, _, _ in pts]
+        name = tags.get('name', '')
+        if tags.get('bridge', 'no') != 'no' and 'bridge' in name.lower():
+            self.bridges[w.id] = name
         if kind:
             self.paths[w.id] = (ids, tags.get('name', ''), kind)
         else:
@@ -144,6 +149,7 @@ def main(out_path, regions_path, osm_dir):
         'nodes': [[i, lat, lon] for i, (lat, lon) in reader.nodes.items()],
         'ways': [[i, ids, name, hw] for i, (ids, name, hw) in reader.ways.items()],
         'paths': [[i, ids, name, kind] for i, (ids, name, kind) in reader.paths.items()],
+        'bridges': [[i, name] for i, name in reader.bridges.items()],
     }
     with open(out_path, 'w') as f:
         json.dump(out, f, separators=(',', ':'))

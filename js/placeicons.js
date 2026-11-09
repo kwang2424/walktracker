@@ -1,9 +1,9 @@
-// Map badges for landmarks and subway stations, drawn in the style of Mapbox's
+// Map badges for the places to collect (landmarks, stations, art, plazas, bridges), drawn in the style of Mapbox's
 // own point-of-interest icons: a round badge with a simple white glyph.
 // Not visited yet: an outlined badge. Visited: a filled one.
 
-export const PLACE_COLORS = { landmark: '#b7791f', station: '#6d28d9' };
-const DARK_COLORS = { landmark: '#e0a43a', station: '#9f7aea' }; // brighter on the night map
+export const PLACE_COLORS = { landmark: '#b7791f', station: '#6d28d9', art: '#db2777', pops: '#0d9488', bridge: '#0369a1' };
+const DARK_COLORS = { landmark: '#e0a43a', station: '#9f7aea', art: '#f472b6', pops: '#2dd4bf', bridge: '#38bdf8' }; // brighter on the night map
 
 const SIZE = 24; // CSS pixels
 
@@ -39,7 +39,52 @@ function monument(ctx) {
   ctx.fillRect(6, 16.9, 12, 1.6); // steps
 }
 
-const GLYPH = { station: train, landmark: monument };
+// A painter's palette with three paint holes and a thumb hole.
+function palette(ctx) {
+  ctx.beginPath();
+  ctx.ellipse(12, 12, 6.6, 5.6, -0.25, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath();
+  ctx.arc(14.4, 14.4, 1.5, 0, Math.PI * 2); // thumb hole
+  ctx.fill();
+  for (const [x, y] of [[9, 10.6], [11.6, 8.6], [14.6, 9.4]]) {
+    ctx.beginPath();
+    ctx.arc(x, y, 0.95, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// A park bench under a small tree: a public plaza.
+function bench(ctx) {
+  ctx.beginPath(); // tree crown
+  ctx.arc(12, 8.4, 3.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(11.35, 10.5, 1.3, 3.2); // trunk
+  ctx.fillRect(6.2, 13.6, 11.6, 1.5); // seat
+  ctx.fillRect(7.2, 15.1, 1.3, 3); // legs
+  ctx.fillRect(15.5, 15.1, 1.3, 3);
+}
+
+// A suspension bridge: two towers, the main cable and the deck.
+function bridge(ctx) {
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.fillRect(5.2, 14.2, 13.6, 1.7); // deck
+  ctx.fillRect(8.2, 7, 1.6, 11); // towers
+  ctx.fillRect(14.2, 7, 1.6, 11);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath(); // main cable
+  ctx.moveTo(4.8, 13.4);
+  ctx.quadraticCurveTo(7, 9.4, 9, 7.6);
+  ctx.quadraticCurveTo(12, 13.6, 15, 7.6);
+  ctx.quadraticCurveTo(17, 9.4, 19.2, 13.4);
+  ctx.stroke();
+}
+
+const GLYPH = { station: train, landmark: monument, art: palette, pops: bench, bridge };
 
 // Draws one badge. Returns the canvas (size * ratio pixels square).
 export function drawBadge(kind, visited, { dark = false, ratio = 2 } = {}) {

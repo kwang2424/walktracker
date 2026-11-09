@@ -1,10 +1,16 @@
-// Landmarks and subway stations, and which ones your walks have passed.
+// Places to collect (landmarks, subway stations, public art, public plazas
+// and bridges), and which ones your walks have passed.
 // Data comes from data/nyc/places.json (built by scripts/build_city.mjs).
 // No DOM here, so it runs in Node tests too.
 import { makeProjector, pointSegDist, haversine } from './geo.js';
 
 export const LANDMARK_RADIUS = 40; // meters from the landmark's outline (you walked past it)
 export const STATION_RADIUS = 60; // meters from a platform (the street above it, or an entrance)
+export const ART_RADIUS = 30; // meters from a public artwork
+export const POPS_RADIUS = 35; // meters from a public plaza's address point
+export const BRIDGE_NEAR = 25; // a bridge spot counts as walked within this many meters...
+export const BRIDGE_SHARE = 0.6; // ...and the bridge once this share of it is walked
+const BRIDGE_STEP = 10; // meters between checked spots along a bridge
 const CELL = 0.002; // ~200 m grid for finding nearby places quickly
 
 export const ROUTE_ORDER = ['1', '2', '3', '4', '5', '6', '7', 'A', 'C', 'E', 'B', 'D', 'F', 'M', 'G', 'J', 'Z', 'L', 'N', 'Q', 'R', 'W', 'S', 'SIR'];
@@ -16,6 +22,9 @@ export const ROUTE_COLORS = {
   G: '#6CBE45', J: '#996633', Z: '#996633', L: '#A7A9AC', N: '#FCCC0A', Q: '#FCCC0A', R: '#FCCC0A', W: '#FCCC0A',
   S: '#808183', SIR: '#0039A6',
 };
+
+export const KINDS = ['landmark', 'station', 'art', 'pops', 'bridge'];
+const KIND_LISTS = { landmark: 'landmarks', station: 'stations', art: 'art', pops: 'pops', bridge: 'bridges' };
 
 const pointInRing = (x, y, ring) => {
   let inside = false;
@@ -55,14 +64,54 @@ export class Places {
       this.items.push({ key: `S:${id}`, kind: 'station', id, name, routes, borough, hood, lat, lon, latlngs: platforms, spots,
         points: platforms.map((p) => this.project(p)), radius: STATION_RADIUS });
     }
+    // Privately owned public spaces (plazas, arcades) and public art: a point each.
+    for (const [id, name, address, type, year, hood, lat, lon] of data.pops || []) {
+      this.items.push({ key: `P:${id}`, kind: 'pops', id, name, address, type, year, hood, lat, lon, latlngs: [[lat, lon]],
+        points: [this.project([lat, lon])], radius: POPS_RADIUS });
+    }
+    for (const [id, name, artist, year, type, address, hood, lat, lon] of data.art || []) {
+      this.items.push({ key: `A:${id}`, kind: 'art', id, name, artist, year, type, address, hood, lat, lon, latlngs: [[lat, lon]],
+        points: [this.project([lat, lon])], radius: ART_RADIUS });
+    }
+    // Bridges: walked across once most of their length is walked (on one walk or several).
+    for (const [id, name, length, hood, flats] of data.bridges || []) {
+      const pieces = flats.map((flat) => { const o = []; for (let i = 0; i < flat.length; i += 2) o.push([flat[i], flat[i + 1]]); return o; });
+      const samples = [];
+      for (const piece of pieces) {
+        for (let i = 1; i < piece.length; i++) {
+          const n = Math.max(1, Math.round(haversine(piece[i - 1], piece[i]) / BRIDGE_STEP));
+          for (let k = i === 1 ? 0 : 1; k <= n; k++) {
+            const t = k / n;
+            samples.push([piece[i - 1][0] + (piece[i][0] - piece[i - 1][0]) * t, piece[i - 1][1] + (piece[i][1] - piece[i - 1][1]) * t]);
+          }
+        }
+      }
+      const longest = pieces.reduce((a, b) => (b.length > a.length ? b : a));
+      const [lat, lon] = longest[Math.floor(longest.length / 2)];
+      this.items.push({ key: `B:${id}`, kind: 'bridge', id, name, length, hood, lat, lon, latlngs: samples, pieces,
+        samples: samples.map((p) => this.project(p)), need: Math.ceil(BRIDGE_SHARE * samples.length), radius: BRIDGE_NEAR });
+    }
     this.items.forEach((item, i) => { item.index = i; });
     this.byKey = new Map(this.items.map((item) => [item.key, item]));
-    this.landmarks = this.items.filter((i) => i.kind === 'landmark');
-    this.stations = this.items.filter((i) => i.kind === 'station');
+    for (const kind of KINDS) this[KIND_LISTS[kind]] = this.items.filter((i) => i.kind === kind);
 
-    // Grid: each item in every cell its catch area touches.
+    // Grid: each item in every cell its catch area touches. Bridges are found
+    // through their spots instead (sampleGrid).
     this.grid = new Map();
+    this.sampleGrid = new Map();
+    const pad = (BRIDGE_NEAR / 111000) * 1.4;
+    for (const b of this.bridges) {
+      b.latlngs.forEach((p, si) => {
+        const keys = new Set();
+        for (const dx of [-pad, pad]) for (const dy of [-pad, pad]) keys.add(`${Math.floor((p[1] + dx) / CELL)},${Math.floor((p[0] + dy) / CELL)}`);
+        for (const k of keys) {
+          if (!this.sampleGrid.has(k)) this.sampleGrid.set(k, []);
+          this.sampleGrid.get(k).push([b, si]);
+        }
+      });
+    }
     for (const item of this.items) {
+      if (item.kind === 'bridge') continue;
       const pts = item.latlngs;
       const pad = item.radius / 111000 + CELL / 4;
       const lats = pts.map((p) => p[0]), lons = pts.map((p) => p[1]);
@@ -82,7 +131,7 @@ export class Places {
     if (!list) return [];
     const [x, y] = this.project(p);
     return list.filter((item) => {
-      if (item.kind === 'station') {
+      if (item.points) {
         return item.points.some(([px, py]) => Math.hypot(px - x, py - y) <= item.radius);
       }
       return item.shapes.some((s) => {
@@ -107,21 +156,58 @@ export class Places {
     return [...found];
   }
 
-  // First time each place was visited: Map key -> time (ms).
+  // Bridges walked across between two GPS points. `cover` (Map key -> Set of
+  // spot numbers) remembers what's been walked so far, across walks; returns
+  // the bridges that just reached BRIDGE_SHARE.
+  crossed(a, b, cover) {
+    if (!this.bridges.length) return [];
+    const d = haversine(a, b);
+    if (d > 150) return []; // a GPS gap, not a walk across
+    const steps = Math.max(1, Math.ceil(d / 8));
+    const done = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const list = this.sampleGrid.get(`${Math.floor(p[1] / CELL)},${Math.floor(p[0] / CELL)}`);
+      if (!list) continue;
+      const [x, y] = this.project(p);
+      for (const [bridge, si] of list) {
+        const [sx, sy] = bridge.samples[si];
+        if (Math.hypot(sx - x, sy - y) > BRIDGE_NEAR) continue;
+        let set = cover.get(bridge.key);
+        if (!set) cover.set(bridge.key, (set = new Set()));
+        if (set.has(si)) continue;
+        set.add(si);
+        if (set.size === bridge.need) done.push(bridge);
+      }
+    }
+    return done;
+  }
+
+  // First time each place was visited: Map key -> time (ms). The returned map
+  // also carries `cover`, how much of each bridge is walked, so a live walk
+  // can carry on from there (see crossed()).
   visits(tracks) {
     const seen = new Map();
+    const cover = new Map();
     for (const t of [...tracks].sort((x, y) => x.startedAt - y.startedAt)) {
       const pts = t.points;
       if (pts.length === 1) for (const item of this.near(pts[0])) if (!seen.has(item.key)) seen.set(item.key, pts[0][2] || t.startedAt);
       const breaks = new Set(t.breaks || []);
       for (let i = 1; i < pts.length; i++) {
         if (breaks.has(i)) continue; // a gap (e.g. a no-tracking area): don't join across it
-        for (const item of this.passed(pts[i - 1], pts[i])) {
-          if (!seen.has(item.key)) seen.set(item.key, pts[i][2] || t.startedAt);
-        }
+        const time = pts[i][2] || t.startedAt;
+        for (const item of this.passed(pts[i - 1], pts[i])) if (!seen.has(item.key)) seen.set(item.key, time);
+        for (const item of this.crossed(pts[i - 1], pts[i], cover)) if (!seen.has(item.key)) seen.set(item.key, time);
       }
     }
+    seen.cover = cover;
     return seen;
+  }
+
+  // How much of a bridge is walked, 0..1 (1 = counts as crossed).
+  bridgeShare(item, cover) {
+    return Math.min(1, (cover?.get(item.key)?.size || 0) / item.need);
   }
 
   // Per subway line: { route, total, visited }, in MTA order.

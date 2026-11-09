@@ -1,6 +1,6 @@
 // Offline support: the app itself is cached so it opens without a connection.
 // Map tiles and street downloads always go to the network.
-const CACHE = 'walktracker-v26';
+const CACHE = 'walktracker-v27';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'js/app.js', 'js/geo.js', 'js/gpx.js', 'js/db.js', 'js/power.js', 'js/stats.js', 'js/mapview.js', 'js/config.js', 'js/city.js', 'js/awake.js', 'js/native.js', 'js/achievements.js', 'js/charts.js', 'js/places.js', 'js/placeicons.js', 'js/track.js', 'js/match.js', 'js/zones.js', 'js/walkstats.js', 'js/blockface.js', 'js/routes.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',

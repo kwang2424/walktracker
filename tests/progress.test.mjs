@@ -65,7 +65,7 @@ test('factsFrom counts finished streets and neighborhoods at 90%', () => {
   ]);
   const f = factsFrom({ summary: summary(), tracksTotals: { meters: 12345 }, streets, walkedByStreet, bestStreak: 4 });
   assert.deepEqual(f, { blocks: 120, km: 12, streetsDone: 2, hoodsVisited: 2, hoodsHalf: 2, hoodsDone: 1, boroughsVisited: 2, cityPct: 1, bestStreak: 4,
-    landmarks: 0, stations: 0, linesDone: 0 });
+    landmarks: 0, stations: 0, linesDone: 0, art: 0, pops: 0, bridges: 0, eastRiver: 0 });
   const withPlaces = factsFrom({ summary: summary(), tracksTotals: { meters: 0 }, streets: [], walkedByStreet: new Map(), bestStreak: 0,
     places: { landmarks: 12, stations: 30, linesDone: 1 } });
   assert.deepEqual([withPlaces.landmarks, withPlaces.stations, withPlaces.linesDone], [12, 30, 1]);

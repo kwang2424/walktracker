@@ -74,6 +74,10 @@ const places = read('places.json');
 check(places.landmarks.length > 1300, `${places.landmarks.length} landmarks (expected about 1,450)`);
 check(places.stations.length >= 420, `${places.stations.length} stations (expected about 445)`);
 check(places.stations.every((s) => s[2].length > 0 && s[5].length >= 2), 'a station without lines or platforms');
+check((places.art || []).length > 700, `${(places.art || []).length} public artworks (expected about 770)`);
+check((places.pops || []).length > 350, `${(places.pops || []).length} public spaces (expected about 390)`);
+const bridgeNames = new Set((places.bridges || []).map((b) => b[1]));
+for (const name of ['Brooklyn Bridge', 'Manhattan Bridge', 'Williamsburg Bridge', 'Queensboro Bridge', 'High Bridge']) check(bridgeNames.has(name), `${name} missing`);
 
 const streets = read('streets.json');
 check(streets.some(([name, borough, n]) => name === 'Broadway' && borough === 'Manhattan' && n > 150), 'Broadway in Manhattan looks wrong');

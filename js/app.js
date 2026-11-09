@@ -33,7 +33,9 @@ const $ = (sel) => document.querySelector(sel);
 
 // ---------------------------------------------------------------- settings
 const SETTINGS_KEY = 'walktracker.settings';
-const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true, hudScope: 'hood', showLandmarks: true, showStations: true, showHeatmap: false, zones: [] };
+// The setting that shows or hides each kind of place.
+const KIND_SETTINGS = { landmark: 'showLandmarks', station: 'showStations', art: 'showArt', pops: 'showPops', bridge: 'showBridges' };
+const settings = { autoDark: true, smartGps: true, mapTheme: 'faded', showTracks: true, hudScope: 'hood', showLandmarks: true, showStations: true, showArt: true, showPops: true, showBridges: true, showHeatmap: false, zones: [] };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch { /* private mode */ }
 if (settings.detailedMap) settings.mapTheme = 'default'; // older setting
 delete settings.detailedMap;
@@ -49,6 +51,7 @@ let lastSummary = null;
 let outlines = null; // neighborhood outlines (GeoJSON)
 let places = null; // landmarks and subway stations
 let placeVisits = new Map(); // place key -> first visit time
+let placeCover = new Map(); // bridge key -> spots walked so far (see Places.crossed)
 let streetTotals = null; // every street with its block count, loaded when needed
 let rec = null; // the walk being recorded
 let pocketOn = false;
@@ -140,7 +143,7 @@ const view = token && mapLibLoaded ? new MapView($('#map'), {
   onMoveEnd: () => onMapMoved(),
   onAuthError: (status) => showSetup(`Mapbox didn’t accept this token (error ${status}). Check that it’s copied fully, and if it has URL restrictions, that they include ${location.origin + location.pathname.replace(/index\.html$/, '')}`),
 }) : null;
-view?.setPlaceKinds({ landmark: settings.showLandmarks, station: settings.showStations });
+view?.setPlaceKinds(placeKinds());
 view?.setHeatVisible(settings.showHeatmap);
 queueMicrotask(() => renderLegend());
 
@@ -198,10 +201,15 @@ function onHoodLoaded(id) {
 }
 let blocksDirty = false;
 
+// Which kinds of places are shown on the map, from the settings.
+function placeKinds() {
+  return Object.fromEntries(Object.entries(KIND_SETTINGS).map(([kind, key]) => [kind, settings[key] !== false]));
+}
+
 // Legend badges are drawn by the same code as the map's, so they always match.
 function renderLegend() {
   const { dark } = mapLook();
-  for (const [kind, on] of [['landmark', settings.showLandmarks], ['station', settings.showStations]]) {
+  for (const [kind, on] of Object.entries(placeKinds())) {
     const el = document.querySelector(`#legend [data-kind="${kind}"]`);
     if (!el) continue;
     el.hidden = !on;
@@ -340,6 +348,7 @@ function updatePlaceVisits() {
   if (!places) return;
   const all = rec ? [...tracks, { startedAt: rec.track.startedAt, points: rec.points }] : tracks;
   placeVisits = places.visits(zoned(all));
+  placeCover = placeVisits.cover;
   for (const item of places.items) view.setPlaceVisited(item.index, placeVisits.has(item.key));
 }
 
@@ -888,7 +897,7 @@ async function walkSummary(t) {
     const touched = new Set(ids.map((id) => city.block(id)).filter((b) => b?.name).map((b) => `${b.name}|${b.borough}`));
     for (const key of touched) if (walked.get(key)?.walked >= total.get(key)) finished.push(key.split('|')[0]);
   }
-  // Landmarks and stations first reached on this walk.
+  // Places first reached on this walk.
   const end = t.endedAt || t.points[t.points.length - 1][2] || t.startedAt;
   const places_ = places ? places.items.filter((item) => {
     const time = placeVisits.get(item.key);
@@ -1229,14 +1238,22 @@ const STREET_FILTERS = {
 let progressView = 'stats';
 
 // ---------------------------------------------------------------- landmarks & stations
+const DISCOVERED = {
+  landmark: (i) => `🏛️ Discovered: ${i.name}`,
+  station: (i) => `🚇 New station: ${i.name} · ${i.routes.join(' ')}`,
+  art: (i) => `🎨 Public art: ${i.name}${i.artist ? ` by ${i.artist}` : ''}`,
+  pops: (i) => `🌳 Public space: ${i.name}`,
+  bridge: (i) => `🌉 Walked across the ${i.name}`,
+};
+
 function discoverPlaces(a, b) {
   if (!places) return;
-  for (const item of places.passed(a, b)) {
+  for (const item of [...places.passed(a, b), ...places.crossed(a, b, placeCover)]) {
     if (placeVisits.has(item.key)) continue;
     placeVisits.set(item.key, b[2] || Date.now());
     view.setPlaceVisited(item.index, true);
     navigator.vibrate?.([20, 40, 20]);
-    if (!asleep()) toast(item.kind === 'landmark' ? `🏛️ Discovered: ${item.name}` : `🚇 New station: ${item.name} · ${item.routes.join(' ')}`, 3500);
+    if (!asleep()) toast(DISCOVERED[item.kind](item), 3500);
     updateStats();
   }
 }
@@ -1260,18 +1277,46 @@ function openPlacePopup(index) {
   const hood = item.hood >= 0 ? city.index.hoods[item.hood]?.name : '';
   if (item.kind === 'station') {
     item.routes.forEach((r) => el.querySelector('.pop-routes').append(bullet(r, true)));
-    el.querySelector('.pop-sub').textContent = ['Subway station', hood].filter(Boolean).join(' · ');
   } else {
     el.querySelector('.pop-routes').remove();
-    const year = (item.designated.match(/\d{4}/) || [])[0];
-    el.querySelector('.pop-sub').textContent = [item.address, hood, year && `Landmark since ${year}`].filter(Boolean).join(' · ');
   }
+  el.querySelector('.pop-sub').textContent = placeDetails(item, hood).join(' · ');
   const when = placeVisits.get(item.key);
   const status = el.querySelector('.pop-status');
-  status.textContent = when ? `Visited ${visitDate(when)}` : 'Not visited yet';
+  const share = item.kind === 'bridge' && !when ? places.bridgeShare(item, placeCover) : 0;
+  status.textContent = when ? `${item.kind === 'bridge' ? 'Walked across' : 'Visited'} ${visitDate(when)}`
+    : share > 0.05 ? `${Math.round(100 * share)}% of the way across` : 'Not visited yet';
   if (when) status.classList.add('walked');
   view.openPopup([item.lat, item.lon], el);
 }
+
+// One line about a place, for its popup.
+function placeDetails(item, hood) {
+  switch (item.kind) {
+    case 'station': return ['Subway station', hood];
+    case 'landmark': {
+      const year = (item.designated.match(/\d{4}/) || [])[0];
+      return [item.address, hood, year && `Landmark since ${year}`].filter(Boolean);
+    }
+    case 'art': return [item.artist, item.year, item.type, item.address || hood].filter(Boolean);
+    case 'pops': return [item.type || 'Public space', item.address, hood, item.year && `open since ${item.year}`].filter(Boolean);
+    case 'bridge': return [`Bridge · ${(item.length / 1000).toFixed(1)} km`, hood].filter(Boolean);
+    default: return [hood].filter(Boolean);
+  }
+}
+
+// What a list row says under a place's name.
+function placeLine(item) {
+  switch (item.kind) {
+    case 'station': return item.routes.join(' ');
+    case 'art': return [item.artist, item.address].filter(Boolean).join(', ');
+    case 'bridge': return `${(item.length / 1000).toFixed(1)} km`;
+    default: return item.address;
+  }
+}
+
+const KIND_LABELS = { landmark: 'Landmarks', station: 'Subway stations', art: 'Public art', pops: 'Public spaces', bridge: 'Bridges' };
+const KIND_LISTS = { landmark: 'landmarks', station: 'stations', art: 'art', pops: 'pops', bridge: 'bridges' };
 
 function showPlace(item) {
   closeSheet();
@@ -1280,17 +1325,24 @@ function showPlace(item) {
 }
 
 let placeFilter = 'near';
+let placeKind = 'all';
 function renderPlacesView() {
   if (!places) {
-    $('#place-tiles').replaceChildren(tile('Landmarks & stations', '–', 'Couldn’t load'));
+    $('#place-tiles').replaceChildren(tile('Places', '–', 'Couldn’t load'));
     return;
   }
-  const visitedL = places.landmarks.filter((i) => placeVisits.has(i.key)).length;
-  const visitedS = places.stations.filter((i) => placeVisits.has(i.key)).length;
-  $('#place-tiles').replaceChildren(
-    tile('Landmarks', `${visitedL.toLocaleString()}`, `of ${places.landmarks.length.toLocaleString()} in NYC`),
-    tile('Subway stations', `${visitedS}`, `of ${places.stations.length}`),
-  );
+  $('#place-tiles').replaceChildren(...Object.entries(KIND_LISTS).filter(([, list]) => places[list]?.length).map(([kind, list]) => {
+    const all = places[list];
+    const done = all.filter((i) => placeVisits.has(i.key)).length;
+    const t = tile(KIND_LABELS[kind], done.toLocaleString(), `of ${all.length.toLocaleString()}`);
+    t.classList.add('tap');
+    t.setAttribute('role', 'button');
+    t.tabIndex = 0;
+    t.setAttribute('aria-pressed', placeKind === kind);
+    t.addEventListener('click', () => { placeKind = placeKind === kind ? 'all' : kind; renderPlacesView(); });
+    if (placeKind === kind) t.classList.add('on');
+    return t;
+  }));
   const lines = $('#line-list');
   lines.replaceChildren();
   for (const l of places.lineProgress(placeVisits)) {
@@ -1303,35 +1355,49 @@ function renderPlacesView() {
   const q = $('#place-search').value.trim().toLowerCase();
   const c = view.getCenter();
   const dist = (i) => (i.lat - c[0]) ** 2 + ((i.lon - c[1]) * 0.76) ** 2;
-  let items = places.items.filter((i) => !q || i.name.toLowerCase().includes(q) || (i.address || '').toLowerCase().includes(q));
+  let items = places.items.filter((i) => (placeKind === 'all' || i.kind === placeKind)
+    && (!q || [i.name, i.address, i.artist].some((x) => x && x.toLowerCase().includes(q))));
   if (!q && placeFilter === 'visited') items = items.filter((i) => placeVisits.has(i.key)).sort((a, b) => placeVisits.get(b.key) - placeVisits.get(a.key));
   else if (!q && placeFilter === 'todo') items = items.filter((i) => !placeVisits.has(i.key)).sort((a, b) => dist(a) - dist(b));
   else items = items.sort((a, b) => dist(a) - dist(b));
   const list = $('#place-list');
   list.replaceChildren();
-  if (!items.length) list.append(emptyRow(placeFilter === 'visited' && !q ? 'Nothing visited yet. Walk past a landmark or a subway station.' : 'Nothing matches.'));
+  if (!items.length) list.append(emptyRow(placeFilter === 'visited' && !q ? 'Nothing visited yet. Walk past a landmark, a station or a piece of public art.' : 'Nothing matches.'));
   for (const item of items.slice(0, 40)) {
     const when = placeVisits.get(item.key);
     const hood = item.hood >= 0 ? city.index.hoods[item.hood]?.name : '';
     const li = row({
       title: item.name,
-      sub: [item.kind === 'station' ? item.routes.join(' ') : item.address, hood, when && `visited ${visitDate(when)}`].filter(Boolean).join(' · '),
+      sub: [placeLine(item), hood, when && `visited ${visitDate(when)}`].filter(Boolean).join(' · '),
       onOpen: () => showPlace(item),
     });
-    const icon = document.createElement('span');
-    icon.className = `place-icon${when ? ' done' : ''}`;
-    icon.textContent = item.kind === 'station' ? '🚇' : '🏛️';
+    const icon = Object.assign(document.createElement('img'), { className: 'place-badge', alt: '' });
+    icon.src = badgeURL(item.kind, !!when);
     li.prepend(icon);
     list.append(li);
   }
 }
 
+// Badge images for lists, drawn once per look.
+const badgeCache = new Map();
+function badgeURL(kind, visited) {
+  const key = `${kind}${visited}${mapLook().dark}`;
+  if (!badgeCache.has(key)) badgeCache.set(key, drawBadge(kind, visited, { dark: mapLook().dark, ratio: 3 }).toDataURL());
+  return badgeCache.get(key);
+}
+
+const EAST_RIVER = ['Brooklyn Bridge', 'Manhattan Bridge', 'Williamsburg Bridge', 'Queensboro Bridge'];
 function placeFacts() {
   if (!places) return {};
+  const count = (list) => (places[list] || []).filter((i) => placeVisits.has(i.key)).length;
   return {
-    landmarks: places.landmarks.filter((i) => placeVisits.has(i.key)).length,
-    stations: places.stations.filter((i) => placeVisits.has(i.key)).length,
+    landmarks: count('landmarks'),
+    stations: count('stations'),
     linesDone: places.lineProgress(placeVisits).filter((l) => l.visited === l.total).length,
+    art: count('art'),
+    pops: count('pops'),
+    bridges: count('bridges'),
+    eastRiver: places.bridges.filter((b) => EAST_RIVER.includes(b.name) && placeVisits.has(b.key)).length,
   };
 }
 
@@ -2203,8 +2269,8 @@ function onSettingChange(key, value) {
   if (key === 'mapTheme') { applyMapStyle(); renderSettings(); }
   if (key === 'showTracks') drawTracks();
   if (key === 'showHeatmap') { view?.setHeatVisible(value); drawHeat(); }
-  if (key === 'showLandmarks' || key === 'showStations') {
-    view?.setPlaceKinds({ landmark: settings.showLandmarks, station: settings.showStations });
+  if (Object.values(KIND_SETTINGS).includes(key)) {
+    view?.setPlaceKinds(placeKinds());
     renderLegend();
   }
   if (key === 'autoDark') armAutoDark();
@@ -2347,7 +2413,7 @@ else if (!token) showSetup();
 else toast('The map couldn’t load. Check your connection and reopen the app.', 60000);
 
 // Handy for debugging from the browser console.
-window.walktracker = { city, db, rebuild, settings, view, awake, native, get rec() { return rec; } };
+window.walktracker = { city, db, rebuild, settings, view, awake, native, get rec() { return rec; }, get places() { return places; }, get placeVisits() { return placeVisits; } };
 
 // iOS scrolls the whole page up to show the keyboard and sometimes leaves it
 // there after the keyboard closes, which pushes the map and cards off-screen.

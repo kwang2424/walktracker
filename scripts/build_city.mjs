@@ -12,7 +12,7 @@
 //   places.json           landmarks and subway stations (from scripts/data)
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildCity, buildPlaces } from './citylib.mjs';
+import { buildCity, buildPlaces, bridgesFrom } from './citylib.mjs';
 
 const [rawPath, outDir] = process.argv.slice(2);
 if (!rawPath || !outDir) {
@@ -32,11 +32,16 @@ write('neighborhoods.geojson', city.outlines);
 write('streets.json', city.streets);
 for (const [id, file] of Object.entries(city.files)) write(join('hoods', `${id}.json`), file);
 const readData = (name) => JSON.parse(readFileSync(new URL(`./data/${name}`, import.meta.url), 'utf8'));
-const places = buildPlaces(readData('nyc-landmarks.json'), readData('nyc-subway-stations.json'), city.hoods);
+const places = buildPlaces(readData('nyc-landmarks.json'), readData('nyc-subway-stations.json'), city.hoods, {
+  pops: readData('nyc-pops.json').pops,
+  art: readData('nyc-public-art.json').art,
+  bridges: bridgesFrom(raw, city.hoods),
+});
 write('places.json', places);
 
 const { total, hoods } = city.index;
 console.log(`${total.blocks} blocks (${(total.length / 1000).toFixed(0)} km) in ${hoods.length} neighborhoods; ` +
   `${total.paths} path pieces (${(total.pathLength / 1000).toFixed(0)} km); ` +
   `${city.outside} blocks outside NYC skipped; ${city.streets.length} streets; ` +
-  `${places.landmarks.length} landmarks, ${places.stations.length} stations`);
+  `${places.landmarks.length} landmarks, ${places.stations.length} stations, ${places.art.length} public art, ` +
+  `${places.pops.length} public spaces, ${places.bridges.length} bridges`);

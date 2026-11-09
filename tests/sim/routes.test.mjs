@@ -10,8 +10,9 @@ const { g, home, walked } = await setup();
 const starts = [home, [40.6890, -73.9800], [40.6800, -73.9900], [40.6930, -73.9870], [40.6760, -73.9800]];
 
 test('suggested loops: mostly new blocks, little doubling back, about the time asked, back where they began', () => {
+  // As many tries as the app gets in its time budget (fewer makes short loops a coin flip near the pass mark).
   for (const minutes of [20, 30, 45, 60]) {
-    const rows = starts.map((start, i) => [start, suggestRoute(g, { start, minutes, walked: (id) => walked.has(id), seed: i + 1, tries: 600, timeLimit: 1e9 })]);
+    const rows = starts.map((start, i) => [start, suggestRoute(g, { start, minutes, walked: (id) => walked.has(id), seed: i + 1, tries: 3000, timeLimit: 1e9 })]);
     const m = rows.map(([start, res]) => { assert.ok(res, `no route for ${minutes} min`); return measure(g, res, walked, start); });
     const avg = (k) => m.reduce((n, x) => n + x[k], 0) / m.length;
     assert.ok(avg('newShare') >= 0.8, `${minutes} min: only ${(avg('newShare') * 100).toFixed(0)}% new`);

@@ -52,6 +52,7 @@ export class MapView {
     this.heatVisible = false;
     this.trimData = collection([]);
     this.replayData = collection([]);
+    this.routeData = collection([]);
     this.placeVisited = new Map(); // place index -> true
     this.popup = null;
     this.me = null;
@@ -226,6 +227,20 @@ export class MapView {
     add({
       id: 'trim', type: 'line', source: 'trim', layout: round, filter: ['==', ['get', 'cut'], 0],
       paint: { 'line-color': c.track, 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 17, 6], 'line-opacity': 0.95, 'line-emissive-strength': 1 },
+    });
+    // A suggested walk: a wide dashed line, under the blocks so their colors show.
+    m.addSource('route', { type: 'geojson', data: this.routeData });
+    add({
+      id: 'route-casing', type: 'line', source: 'route', layout: round, filter: ['==', ['geometry-type'], 'LineString'],
+      paint: { 'line-color': '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 5, 17, 12], 'line-opacity': 0.85, 'line-emissive-strength': 1 },
+    });
+    add({
+      id: 'route', type: 'line', source: 'route', layout: round, filter: ['==', ['geometry-type'], 'LineString'],
+      paint: { 'line-color': c.track, 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 17, 7], 'line-dasharray': [1.2, 1.2], 'line-emissive-strength': 1 },
+    });
+    add({
+      id: 'route-start', type: 'circle', source: 'route', filter: ['==', ['geometry-type'], 'Point'],
+      paint: { 'circle-radius': 7, 'circle-color': c.track, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 3, 'circle-emissive-strength': 1 },
     });
     // Replaying a walk: the line so far and a dot at its head.
     m.addSource('replay', { type: 'geojson', data: this.replayData });
@@ -467,6 +482,15 @@ export class MapView {
   setHeatVisible(on) {
     this.heatVisible = on;
     if (this.map.getLayer('heat')) this.map.setLayoutProperty('heat', 'visibility', on ? 'visible' : 'none');
+  }
+
+  // A suggested walk ([[lat, lon]]), or [] to clear it.
+  setRoute(coords) {
+    this.routeData = collection(coords.length > 1 ? [
+      { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords.map(ll) } },
+      { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: ll(coords[0]) } },
+    ] : []);
+    this.map.getSource('route')?.setData(this.routeData);
   }
 
   // A walk being replayed, drawn up to point k (null clears it).

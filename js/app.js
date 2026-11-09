@@ -11,6 +11,7 @@ import { drawBadge } from './placeicons.js';
 import { LiveFilter, RideFilter } from './track.js';
 import { ZONE_SIZES, BLOCK_PAD, inZone, withoutZones, runsOf } from './zones.js';
 import { blockAround } from './blockface.js';
+import { suggestRoute, WALK_SPEED } from './routes.js';
 import { walkDetails, formatPace, trimWalk, untrimWalk, overlapsSaved } from './walkstats.js';
 import { MAPBOX_TOKEN } from './config.js';
 import { City, overrideWalked } from './city.js';
@@ -570,6 +571,7 @@ async function startWalk(resume = null) {
   document.body.classList.add('recording');
   $('#rec').hidden = false;
   $('#btn-locate').hidden = true;
+  $('#btn-route').hidden = true;
   $('#btn-pocket').hidden = false;
   $('#btn-record-label').textContent = 'Finish';
   setGps('wait', 'Finding GPS…');
@@ -783,6 +785,8 @@ async function stopWalk() {
   $('#rec-label').textContent = 'Recording';
   setStatus('');
   $('#btn-locate').hidden = false;
+  $('#btn-route').hidden = false;
+  view.setRoute([]); // a suggested walk you were following
   $('#btn-pocket').hidden = true;
   $('#btn-record-label').textContent = 'Start walk';
   if (r.points.length < 2) {
@@ -1039,7 +1043,9 @@ navigator.getBattery?.().then((b) => {
 }).catch(() => {});
 
 // ---------------------------------------------------------------- location
+let myPos = null; // last known position, for suggestions
 function showMe(p) {
+  myPos = [p[0], p[1]];
   view.showMe(p);
 }
 
@@ -1567,6 +1573,64 @@ function drawHeat() {
     }
   }
   view.setHeat(pts);
+}
+
+// ---------------------------------------------------------------- suggested walks
+// A loop from where you are (or the middle of the map) over blocks you
+// haven't walked: see js/routes.js for how it's chosen.
+let routeSuggestion = null; // { minutes, seed, start, res }
+
+function openRouteCard() {
+  closeSheet();
+  routeSuggestion = { minutes: routeSuggestion?.minutes || 30, seed: 1 };
+  $('#route-card').hidden = false;
+  findRoute();
+}
+
+async function findRoute() {
+  const s = routeSuggestion;
+  if (!s) return;
+  document.querySelectorAll('#rt-time button').forEach((b) => b.setAttribute('aria-pressed', Number(b.dataset.min) === s.minutes));
+  $('#rt-info').textContent = 'Finding a walk…';
+  $('#rt-start').disabled = true;
+  const start = myPos && haversine(myPos, view.getCenter()) < 3000 ? myPos : view.getCenter();
+  // Everything within reach has to be loaded.
+  const reach = (s.minutes * 60 * WALK_SPEED) / 2 / 111000;
+  await city.ensure(city.hoodsIn([start[0] - reach, start[1] - reach * 1.3, start[0] + reach, start[1] + reach * 1.3], 0)).catch(() => {});
+  city.refreshMatches();
+  await new Promise((r) => setTimeout(r, 30)); // let "Finding a walk…" show
+  if (routeSuggestion !== s) return;
+  // Streets with only a few blocks left: finishing them is worth a bit more.
+  const left = new Map();
+  for (const b of city.loadedBlocks()) {
+    if (!b.name || city.isWalked(b.id, overrides)) continue;
+    const key = `${b.name}|${b.borough}`;
+    left.set(key, (left.get(key) || 0) + 1);
+  }
+  const res = suggestRoute(city.graph, {
+    start, minutes: s.minutes, seed: s.seed,
+    walked: (id) => city.isWalked(id, overrides),
+    avoid: (coords) => settings.zones.length > 0 && coords.some((p) => inZone(p, settings.zones)),
+    nearlyDone: (e) => { const b = city.block(e.id); return !!b?.name && (left.get(`${b.name}|${b.borough}`) || 99) <= 3; },
+  });
+  if (routeSuggestion !== s) return;
+  s.res = res;
+  if (!res) {
+    view.setRoute([]);
+    $('#rt-info').textContent = 'No walk found from here. Try the middle of the map on a street.';
+    return;
+  }
+  const newBlocks = new Set(res.edges.filter((id) => !city.isPath(id) && !city.isWalked(id, overrides))).size;
+  $('#rt-info').textContent = `${km(res.meters)} · about ${Math.round(res.minutes)} min · ${newBlocks} new block${newBlocks === 1 ? '' : 's'} (${km(res.newMeters)} new)`;
+  $('#rt-start').disabled = false;
+  view.setRoute(res.coords);
+  view.fitPoints(res.coords, { bottom: Math.min(innerHeight * 0.5, $('#route-card').getBoundingClientRect().height + 40) });
+}
+
+function closeRouteCard({ keepLine = false } = {}) {
+  routeSuggestion = null;
+  $('#route-card').hidden = true;
+  if (!keepLine) view.setRoute([]);
 }
 
 // ---------------------------------------------------------------- one walk
@@ -2209,6 +2273,20 @@ $('#hood-search').addEventListener('input', renderHoods);
 $('#btn-resume').addEventListener('click', () => resumable && startWalk(resumable));
 $('#sum-next').addEventListener('click', showNextSummary);
 $('#wd-close').addEventListener('click', closeWalkDetail);
+$('#btn-route').addEventListener('click', openRouteCard);
+$('#rt-close').addEventListener('click', () => closeRouteCard());
+$('#rt-another').addEventListener('click', () => { if (routeSuggestion) { routeSuggestion.seed++; findRoute(); } });
+document.querySelectorAll('#rt-time button').forEach((b) => b.addEventListener('click', () => {
+  if (!routeSuggestion) return;
+  routeSuggestion.minutes = Number(b.dataset.min);
+  routeSuggestion.seed = 1;
+  findRoute();
+}));
+// Start walking it: the line stays on the map while you record.
+$('#rt-start').addEventListener('click', () => {
+  closeRouteCard({ keepLine: true });
+  if (!rec) $('#btn-record').click();
+});
 $('#aw-finish').addEventListener('click', finishAutoWalk);
 $('#aw-hide').addEventListener('click', () => { $('#auto-walk').hidden = true; });
 $('#wd-replay').addEventListener('click', startReplay);

@@ -136,6 +136,22 @@
     </div>
   </section>
 
+  <!-- A suggested walk -->
+  <section id="route-card" class="card notice" hidden>
+    <div class="sum-head"><b>Suggested walk</b><button id="rt-close" class="act">Close</button></div>
+    <div class="segmented rt-time" id="rt-time">
+      <button data-min="20" aria-pressed="false">20 min</button>
+      <button data-min="30" aria-pressed="true">30 min</button>
+      <button data-min="45" aria-pressed="false">45 min</button>
+      <button data-min="60" aria-pressed="false">1 hour</button>
+    </div>
+    <p class="rt-info" id="rt-info">Finding a walk…</p>
+    <div class="notice-actions">
+      <button id="rt-another" class="btn btn-ghost">Another one</button>
+      <button id="rt-start" class="btn btn-primary">Start walk</button>
+    </div>
+  </section>
+
   <!-- Replaying a walk on the map -->
   <section id="replay-bar" class="card notice replay-bar" hidden>
     <div class="sum-head"><b id="rp-title">Replaying</b><button id="rp-stop" class="act">Stop</button></div>
@@ -180,6 +196,9 @@
   <div id="toast" role="status" aria-live="polite"></div>
 
   <nav id="toolbar">
+    <button id="btn-route" class="fab" aria-label="Suggest a walk">
+      <svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M8.2 18H15a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h6.8"/></svg>
+    </button>
     <button id="btn-locate" class="fab" aria-label="Go to my location">
       <svg viewBox="0 0 24 24"><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7"/><circle class="solid" cx="12" cy="12" r="2.5"/></svg>
     </button>

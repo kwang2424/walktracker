@@ -9,7 +9,7 @@
     "start": "npx --yes http-server -c-1 -p 8080 .",
     "test:e2e": "node --test --test-concurrency=1 tests/e2e/*.e2e.mjs",
     "test:properties": "PROPERTY_CASES=1000 node --test tests/properties.test.mjs",
-    "test:sim": "node --test tests/sim/nyc.test.mjs"
+    "test:sim": "node --test tests/sim/*.test.mjs"
   },
   "license": "MIT",
   "devDependencies": {

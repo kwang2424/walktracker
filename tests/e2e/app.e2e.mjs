@@ -283,3 +283,19 @@ test('iPhone app: an automatic walk in progress, finished from the card', { time
   assert.deepEqual(app.errors, []);
   await app.close();
 });
+
+test('suggested walks: a loop of about the time asked, over new blocks', { timeout: 90000 }, async () => {
+  const app = await openApp({ tracks: [savedWalk()] });
+  await app.page.evaluate(() => walktracker.view.setView([40.7380, -73.9898], 15));
+  await app.page.click('#btn-route');
+  const info = async () => app.text('#rt-info');
+  await app.page.waitForFunction(() => /new block/.test(document.querySelector('#rt-info').textContent), null, { timeout: 30000 });
+  assert.match(await info(), /about (2\d|3[0-6]) min/);
+  assert.ok(await app.page.evaluate(() => walktracker.view.routeData.features.length) === 2, 'no route on the map');
+  await app.page.click('[data-min="20"]');
+  await app.page.waitForFunction(() => /about (1[6-9]|2[0-4]) min/.test(document.querySelector('#rt-info').textContent), null, { timeout: 30000 });
+  await app.page.click('#rt-close');
+  assert.equal(await app.page.evaluate(() => walktracker.view.routeData.features.length), 0);
+  assert.deepEqual(app.errors, []);
+  await app.close();
+});

@@ -141,6 +141,12 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .walkcard .wd-play { color: var(--accent); }
 .replay-bar { z-index: 1055; }
 #auto-walk { z-index: 1052; }
+#route-card { z-index: 1056; }
+#route-card .rt-time { grid-template-columns: repeat(4, 1fr); margin: 10px 0 8px; }
+#route-card .act { font-size: 13px; font-weight: 600; color: var(--muted); padding: 4px 8px; }
+.rt-info { margin: 0 0 12px; font-size: 14px; }
+#toolbar { gap: 12px; }
+.btn-record { min-width: 150px; }
 .aw-note { margin: 0 0 12px; }
 .replay-bar .act { font-size: 13px; font-weight: 600; color: var(--accent); padding: 4px 8px; }
 .rp-progress { height: 6px; border-radius: 3px; background: var(--surface); overflow: hidden; margin: 10px 0 6px; }
